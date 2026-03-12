@@ -1,0 +1,50 @@
+export function fmtNumber(n: unknown): string {
+  if (n == null || isNaN(Number(n))) return "—";
+  const val = Number(n);
+  if (Math.abs(val) >= 1e6)
+    return val.toLocaleString("id-ID", { maximumFractionDigits: 0 });
+  if (Math.abs(val) >= 1)
+    return val.toLocaleString("id-ID", { maximumFractionDigits: 2 });
+  return val.toFixed(4);
+}
+
+export function fmtProb(p: unknown): string {
+  if (p == null || isNaN(Number(p))) return "—";
+  return (Number(p) * 100).toFixed(2) + "%";
+}
+
+export function riskColor(level: string): string {
+  if (level === "HIGH") return "bg-red-500/20 text-red-400 border-red-500/30";
+  if (level === "MEDIUM")
+    return "bg-amber-500/20 text-amber-400 border-amber-500/30";
+  return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+}
+
+const NICE_HEADERS: Record<string, string> = {
+  ACCOUNT_NUMBER: "Account",
+  CUSTOMER_NAME: "Customer",
+  CUSTOMER_TRX_ID: "TRX ID",
+  PARTY_ID: "Party ID",
+  TRX_AMOUNT: "Amount",
+  TRX_DATE: "Trx Date",
+  DUE_DATE: "Due Date",
+  prob_bad_debt: "Probability",
+  risk_level: "Risk",
+  risk_cust: "Risk",
+  recommended_action: "Action",
+  paid_ratio: "Paid %",
+  n_pay_pre_due: "Payments",
+  party_prior_bd90_cnt: "Prior BD90",
+  cust_score_max: "Max Score",
+  cust_score_mean: "Mean Score",
+  cust_score_wavg_amount: "WAvg Score",
+  invoice_cnt: "Invoices",
+  total_amount: "Total Amount",
+  paid_ratio_pre_due_total: "Paid Total %",
+  pct_invoices_gap_gt_90_pre_due: "Gap >90d %",
+  expected_financial_loss: "Expected Loss",
+};
+
+export function niceHeader(key: string): string {
+  return NICE_HEADERS[key] || key.replace(/_/g, " ");
+}

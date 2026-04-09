@@ -27,7 +27,9 @@ const NICE_HEADERS: Record<string, string> = {
   PARTY_ID: "Party ID",
   TRX_AMOUNT: "Amount",
   TRX_DATE: "Trx Date",
+  days_to_due: "Days to Due",
   DUE_DATE: "Due Date",
+  expected_financial_loss: "Expected Loss",
   prob_bad_debt: "Probability",
   risk_level: "Risk",
   risk_cust: "Risk",
@@ -42,7 +44,6 @@ const NICE_HEADERS: Record<string, string> = {
   total_amount: "Total Amount",
   paid_ratio_pre_due_total: "Paid Total %",
   pct_invoices_gap_gt_90_pre_due: "Gap >90d %",
-  expected_financial_loss: "Expected Loss",
 };
 
 export function niceHeader(key: string): string {

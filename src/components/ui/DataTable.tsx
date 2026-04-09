@@ -9,6 +9,21 @@ interface DataTableProps {
   title: string;
   subtitle?: string;
   priorityCols?: string[];
+  isServerMode?: boolean;
+  serverPagination?: {
+    page: number;
+    page_size: number;
+    total_records: number;
+    total_pages: number;
+  };
+  serverSearch?: string;
+  onSearchChange?: (value: string) => void;
+  serverSort?: {
+    key: string;
+    direction: SortDirection;
+  };
+  onSortChange?: (key: string, direction: SortDirection) => void;
+  onPageChange?: (page: number) => void;
 }
 
 export function DataTable({
@@ -16,6 +31,13 @@ export function DataTable({
   title,
   subtitle,
   priorityCols,
+  isServerMode = false,
+  serverPagination,
+  serverSearch,
+  onSearchChange,
+  serverSort,
+  onSortChange,
+  onPageChange,
 }: DataTableProps) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
@@ -35,6 +57,8 @@ export function DataTable({
   }, [rows, priorityCols]);
 
   const filteredAndSorted = useMemo(() => {
+    if (isServerMode) return rows;
+
     let result = rows;
 
     // Search filter
@@ -84,21 +108,31 @@ export function DataTable({
   }, [rows, search, columns, sortConfig]);
 
   const requestSort = (key: string) => {
+    const baseSort = isServerMode ? (serverSort || { key: "", direction: null }) : sortConfig;
+
     let direction: SortDirection = "asc";
-    if (sortConfig.key === key && sortConfig.direction === "asc") {
+    if (baseSort.key === key && baseSort.direction === "asc") {
       direction = "desc";
-    } else if (sortConfig.key === key && sortConfig.direction === "desc") {
+    } else if (baseSort.key === key && baseSort.direction === "desc") {
       direction = null;
     }
-    setSortConfig({ key, direction });
-    setPage(1);
+
+    if (isServerMode) {
+      onSortChange?.(key, direction);
+      onPageChange?.(1);
+    } else {
+      setSortConfig({ key, direction });
+      setPage(1);
+    }
   };
 
   const getSortIcon = (key: string) => {
-    if (sortConfig.key !== key || sortConfig.direction === null) {
+    const activeSort = isServerMode ? (serverSort || { key: "", direction: null }) : sortConfig;
+
+    if (activeSort.key !== key || activeSort.direction === null) {
       return <span className="text-gray-600 opacity-50 ml-1">⇅</span>;
     }
-    return sortConfig.direction === "asc" ? (
+    return activeSort.direction === "asc" ? (
       <span className="text-blue-600 dark:text-blue-400 font-bold ml-1">↑</span>
     ) : (
       <span className="text-blue-600 dark:text-blue-400 font-bold ml-1">↓</span>
@@ -107,14 +141,27 @@ export function DataTable({
 
   if (!rows.length) return null;
 
-  const totalPages = Math.max(
-    1,
-    Math.ceil(filteredAndSorted.length / rowsPerPage),
-  );
-  const currentRows = filteredAndSorted.slice(
-    (page - 1) * rowsPerPage,
-    page * rowsPerPage,
-  );
+  const totalPages = isServerMode
+    ? Math.max(1, serverPagination?.total_pages || 1)
+    : Math.max(1, Math.ceil(filteredAndSorted.length / rowsPerPage));
+
+  const currentRows = isServerMode
+    ? filteredAndSorted
+    : filteredAndSorted.slice((page - 1) * rowsPerPage, page * rowsPerPage);
+
+  const activePage = isServerMode ? Math.max(1, serverPagination?.page || 1) : page;
+  const activePageSize = isServerMode
+    ? Math.max(1, serverPagination?.page_size || rowsPerPage)
+    : rowsPerPage;
+  const activeTotal = isServerMode
+    ? Math.max(0, serverPagination?.total_records || 0)
+    : filteredAndSorted.length;
+
+  const fromIdx =
+    activeTotal === 0 ? 0 : (activePage - 1) * activePageSize + 1;
+  const toIdx = Math.min(activePage * activePageSize, activeTotal);
+
+  const searchValue = isServerMode ? (serverSearch || "") : search;
 
   return (
     <div className="bg-white/60 dark:bg-gray-900/60 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
@@ -129,15 +176,20 @@ export function DataTable({
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500">
-            {filteredAndSorted.length} rows
+            {activeTotal} rows
           </span>
           <input
             type="text"
             placeholder="Search all..."
-            value={search}
+            value={searchValue}
             onChange={(e) => {
-              setSearch(e.target.value);
-              setPage(1);
+              if (isServerMode) {
+                onSearchChange?.(e.target.value);
+                onPageChange?.(1);
+              } else {
+                setSearch(e.target.value);
+                setPage(1);
+              }
             }}
             className="bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-1.5 text-sm text-gray-800 dark:text-gray-200 
                        placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500 w-full sm:w-48"
@@ -161,9 +213,9 @@ export function DataTable({
                       {getSortIcon(col)}
                     </span>
                     <span
-                      className={`transition-opacity ${sortConfig.key === col && sortConfig.direction !== null ? "opacity-100" : "opacity-0 hidden"}`}
+                      className={`transition-opacity ${(isServerMode ? (serverSort?.key === col && serverSort?.direction !== null) : (sortConfig.key === col && sortConfig.direction !== null)) ? "opacity-100" : "opacity-0 hidden"}`}
                     >
-                      {sortConfig.key === col && getSortIcon(col)}
+                      {getSortIcon(col)}
                     </span>
                   </div>
                 </th>
@@ -222,27 +274,36 @@ export function DataTable({
       {/* Pagination Controls */}
       <div className="p-3 bg-white/40 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
         <div className="text-gray-500">
-          Showing{" "}
-          {filteredAndSorted.length === 0 ? 0 : (page - 1) * rowsPerPage + 1} to{" "}
-          {Math.min(page * rowsPerPage, filteredAndSorted.length)} of{" "}
-          {filteredAndSorted.length} rows
+          Showing {fromIdx} to {toIdx} of {activeTotal} rows
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
+            onClick={() => {
+              if (isServerMode) {
+                onPageChange?.(Math.max(1, activePage - 1));
+              } else {
+                setPage((p) => Math.max(1, p - 1));
+              }
+            }}
+            disabled={activePage === 1}
             className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-300 dark:border-gray-700 rounded transition-colors text-gray-700 dark:text-gray-300 font-medium"
           >
             Previous
           </button>
           <div className="px-3 font-medium text-gray-600 dark:text-gray-400">
             Page{" "}
-            <span className="text-gray-800 dark:text-gray-200">{page}</span> of{" "}
+            <span className="text-gray-800 dark:text-gray-200">{activePage}</span> of{" "}
             {totalPages}
           </div>
           <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
+            onClick={() => {
+              if (isServerMode) {
+                onPageChange?.(Math.min(totalPages, activePage + 1));
+              } else {
+                setPage((p) => Math.min(totalPages, p + 1));
+              }
+            }}
+            disabled={activePage === totalPages}
             className="px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed border border-gray-300 dark:border-gray-700 rounded transition-colors text-gray-700 dark:text-gray-300 font-medium"
           >
             Next

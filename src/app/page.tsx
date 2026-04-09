@@ -1,18 +1,94 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Image from "next/image";
 import { StatCard } from "@/components/ui/StatCard";
 import { RiskBar } from "@/components/ui/RiskBar";
 import { DataTable } from "@/components/ui/DataTable";
-import { TimeRange, ScoringResult } from "@/types";
+import {
+  ComputeJobStatus,
+  ComputeTriggerResponse,
+  PaginationMeta,
+  ScoringResult,
+  TimeRange,
+} from "@/types";
 
 // ── Config ─────────────────────────────────────────────────────────────
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
+const getTodayISO = () => new Date().toISOString().slice(0, 10);
+
+type ProcessLog = {
+  ts: string;
+  level: "info" | "warn" | "error";
+  message: string;
+};
+
+type EndpointMode = "score" | "alerts" | "receipt_trigger";
+
+const NON_LOW_RISKS = new Set(["HIGH", "MEDIUM"]);
+
+const normalizeRisk = (value: unknown): string =>
+  String(value ?? "")
+    .trim()
+    .toUpperCase();
+
+const getRowRisk = (row: Record<string, unknown>): string =>
+  normalizeRisk(row.risk_level ?? row.risk_ew ?? row.risk_cust);
+
+const isNonLowRiskRow = (
+  row: Record<string, unknown>,
+  threshold: number,
+): boolean => {
+  const risk = getRowRisk(row);
+  if (risk) {
+    return NON_LOW_RISKS.has(risk);
+  }
+  const prob = Number(row.prob_bad_debt);
+  return Number.isFinite(prob) ? prob >= threshold : false;
+};
+
+const summarizeRowsByRisk = (
+  rows: Record<string, unknown>[],
+): Record<string, number> => {
+  return rows.reduce<Record<string, number>>((acc, row) => {
+    const risk = getRowRisk(row);
+    if (!risk) return acc;
+    acc[risk] = (acc[risk] || 0) + 1;
+    return acc;
+  }, {});
+};
+
+const selectInvoiceRows = (
+  result: ScoringResult | null,
+  endpoint: EndpointMode,
+  threshold: number,
+): Record<string, unknown>[] => {
+  if (!result) return [];
+
+  const baseRows =
+    endpoint === "alerts"
+      ? (result.alerts ?? [])
+      : endpoint === "receipt_trigger"
+        ? (result.all_scores_preview ?? [])
+        : (result.preview ?? []);
+
+  if (endpoint === "score") {
+    return baseRows;
+  }
+  return baseRows.filter((row) => isNonLowRiskRow(row, threshold));
+};
+
 // ── Main Page ──────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const defaultPagination: PaginationMeta = {
+    page: 1,
+    page_size: 50,
+    total_records: 0,
+    total_pages: 1,
+  };
+
   const [timeRanges, setTimeRanges] = useState<TimeRange[]>([
     { key: "1w", label: "1 minggu terakhir" },
     { key: "2w", label: "2 minggu terakhir" },
@@ -25,12 +101,13 @@ export default function Dashboard() {
   const [selectedTimeRange, setSelectedTimeRange] = useState("1w");
   const [models, setModels] = useState<{key: string, label: string}[]>([]);
   const [selectedModel, setSelectedModel] = useState("stacked");
-  const [snapshotDate, setSnapshotDate] = useState("2026-02-10");
+  const [snapshotDate, setSnapshotDate] = useState(getTodayISO());
   const [minDate, setMinDate] = useState("");
   const [maxDate, setMaxDate] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [theme, setTheme] = useState<"light" | "dark">("dark");
+  const [apiStatus, setApiStatus] = useState<"connected" | "disconnected" | "checking">("checking");
 
   useEffect(() => {
     if (theme === "dark") {
@@ -44,14 +121,69 @@ export default function Dashboard() {
   // UI state
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<ScoringResult | null>(null);
-  const [activeEndpoint, setActiveEndpoint] = useState<
-    "score" | "alerts" | "receipt_trigger"
-  >("score");
+  const [customerRows, setCustomerRows] = useState<Record<string, unknown>[]>([]);
+  const [customerRiskSummary, setCustomerRiskSummary] = useState<Record<string, number> | null>(null);
+  const [invoicePagination, setInvoicePagination] = useState<PaginationMeta>(defaultPagination);
+  const [customerPagination, setCustomerPagination] = useState<PaginationMeta>(defaultPagination);
+  const [invoicePage, setInvoicePage] = useState(1);
+  const [invoicePageSize] = useState(50);
+  const [invoiceSearch, setInvoiceSearch] = useState("");
+  const [invoiceSortBy, setInvoiceSortBy] = useState("prob_bad_debt");
+  const [invoiceSortOrder, setInvoiceSortOrder] = useState<"asc" | "desc">("desc");
+  const [customerPage, setCustomerPage] = useState(1);
+  const [customerPageSize] = useState(50);
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [customerSortBy, setCustomerSortBy] = useState("cust_score_max");
+  const [customerSortOrder, setCustomerSortOrder] = useState<"asc" | "desc">("desc");
+  const [computeStatus, setComputeStatus] = useState<ComputeJobStatus | null>(null);
+  const [computeMessage, setComputeMessage] = useState<string | null>(null);
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [processLogs, setProcessLogs] = useState<ProcessLog[]>([]);
+  const [activeEndpoint, setActiveEndpoint] = useState<EndpointMode>("score");
   const [initialLoaded, setInitialLoaded] = useState(false);
-  
+
   // AbortController ref to handle race conditions
   const abortControllerRef = useRef<AbortController | null>(null);
+  const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastPolledStatusRef = useRef<string | null>(null);
+
+  const appendLog = useCallback(
+    (level: ProcessLog["level"], message: string) => {
+      const ts = new Date().toLocaleTimeString("id-ID", {
+        hour12: false,
+      });
+      setProcessLogs((prev) => {
+        const next = [...prev, { ts, level, message }];
+        return next.slice(-120);
+      });
+    },
+    [],
+  );
+
+  // Monitor API Status
+  useEffect(() => {
+    const checkApi = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/health`, { method: "GET" });
+        if (res.ok) {
+          setApiStatus("connected");
+        } else {
+          setApiStatus("disconnected");
+        }
+      } catch (err) {
+        setApiStatus("disconnected");
+      }
+    };
+    
+    // Initial check
+    checkApi();
+    
+    // Check every 15 seconds
+    const interval = setInterval(checkApi, 15000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load models and time ranges from API config
   useEffect(() => {
@@ -75,6 +207,68 @@ export default function Dashboard() {
       .catch(() => {});
   }, []);
 
+  const fetchCustomerRisk = useCallback(
+    async (opts?: {
+      timeRange?: string;
+      modelKey?: string;
+      page?: number;
+      pageSize?: number;
+      search?: string;
+      sortBy?: string;
+      sortOrder?: "asc" | "desc";
+    }) => {
+      const tr = opts?.timeRange ?? selectedTimeRange;
+      const mk = opts?.modelKey ?? selectedModel;
+      const page = opts?.page ?? customerPage;
+      const pageSize = opts?.pageSize ?? customerPageSize;
+      const search = opts?.search ?? customerSearch;
+      const sortBy = opts?.sortBy ?? customerSortBy;
+      const sortOrder = opts?.sortOrder ?? customerSortOrder;
+
+      const params = new URLSearchParams({
+        model: mk,
+        snapshot_date: snapshotDate,
+        time_range: tr,
+        page: String(page),
+        page_size: String(pageSize),
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      });
+      if (tr === "custom") {
+        params.set("start_date", startDate);
+        params.set("end_date", endDate);
+      }
+      if (search.trim()) {
+        params.set("search", search.trim());
+      }
+
+      const resp = await fetch(`${API_BASE}/db/customer_risk?${params}`);
+      const data = (await resp.json()) as ScoringResult;
+      if (!resp.ok || data.error) {
+        setCustomerRows([]);
+        setCustomerRiskSummary(null);
+        setCustomerPagination(defaultPagination);
+        return;
+      }
+
+      setCustomerRows(data.customer_risk || []);
+      setCustomerRiskSummary(data.customer_risk_summary || null);
+      setCustomerPagination(data.pagination || defaultPagination);
+    },
+    [
+      selectedTimeRange,
+      selectedModel,
+      snapshotDate,
+      startDate,
+      endDate,
+      customerPage,
+      customerPageSize,
+      customerSearch,
+      customerSortBy,
+      customerSortOrder,
+    ],
+  );
+
   const runScoring = useCallback(async (
     endpoint: "score" | "alerts" | "receipt_trigger" = "score",
     opts?: { timeRange?: string; thresh?: number; modelKey?: string },
@@ -89,6 +283,7 @@ export default function Dashboard() {
 
     setLoading(true);
     setError(null);
+    setNotice(null);
 
     const tr = opts?.timeRange ?? selectedTimeRange;
     const th = opts?.thresh ?? threshold;
@@ -98,10 +293,17 @@ export default function Dashboard() {
       model: mk,
       snapshot_date: snapshotDate,
       time_range: tr,
+      page: String(invoicePage),
+      page_size: String(invoicePageSize),
+      sort_by: invoiceSortBy,
+      sort_order: invoiceSortOrder,
     });
     if (tr === "custom") {
         params.set("start_date", startDate);
         params.set("end_date", endDate);
+    }
+    if (invoiceSearch.trim()) {
+      params.set("search", invoiceSearch.trim());
     }
 
     let path = "/db/score";
@@ -112,24 +314,80 @@ export default function Dashboard() {
       path = "/db/early_warning/receipt_trigger";
     }
 
+    // Auto-bootstrap compute if data doesn't exist for current filter/mode.
+    params.set("auto_compute_if_missing", "true");
+
+    appendLog("info", `Request ${endpoint} dimulai (range=${tr}, model=${mk})`);
+
     try {
       const resp = await fetch(`${API_BASE}${path}?${params}`, {
           signal: abortController.signal
       });
-      const data: ScoringResult = await resp.json();
+      const data = (await resp.json()) as ScoringResult & ComputeTriggerResponse;
+
+      if (resp.status === 202 && data.status === "running") {
+        setResult(null);
+        setCustomerRows([]);
+        setCustomerRiskSummary(null);
+        setInvoicePagination(defaultPagination);
+        setCustomerPagination(defaultPagination);
+        setNotice("Data belum tersedia. Sistem sedang menyiapkan hasil compute.");
+        setComputeStatus((prev) => {
+          if (data.job_id) {
+            return { job_id: data.job_id, status: "running" };
+          }
+          return prev?.job_id ? { job_id: prev.job_id, status: "running" } : prev;
+        });
+        setComputeMessage(
+          data.message || "Compute sedang berjalan. Menunggu hasil pertama...",
+        );
+        appendLog("info", data.message || "Compute berjalan di background");
+        return;
+      }
+
+      if (!resp.ok) {
+        if (resp.status === 404 && data.error?.includes("No pre-computed")) {
+          setResult(null);
+          setCustomerRows([]);
+          setCustomerRiskSummary(null);
+          setInvoicePagination(defaultPagination);
+          setCustomerPagination(defaultPagination);
+          setNotice("Data untuk filter ini belum tersedia. Sistem akan menyiapkan compute otomatis.");
+          appendLog("warn", "Data belum ada untuk filter saat ini");
+          return;
+        }
+        setError(data.error || `Request failed (${resp.status})`);
+        appendLog("error", data.error || `Request gagal (${resp.status})`);
+        return;
+      }
       if (data.error) {
         setError(data.error);
+        appendLog("error", data.error);
       } else {
         setResult(data);
+        setInvoicePagination(data.pagination || defaultPagination);
+        await fetchCustomerRisk({ timeRange: tr, modelKey: mk });
+        const rowsLen =
+          (data.preview?.length || 0) +
+          (data.alerts?.length || 0) +
+          (data.all_scores_preview?.length || 0);
+        if (rowsLen === 0) {
+          setNotice("Tidak ada data untuk filter ini.");
+          appendLog("warn", "Fetch sukses namun tidak ada data yang cocok");
+        } else {
+          setNotice(null);
+          appendLog("info", `Fetch sukses: ${rowsLen} baris dimuat`);
+        }
       }
     } catch (e) {
       if (e instanceof Error && e.name === 'AbortError') {
-          console.log('Fetch aborted due to new request');
+          appendLog("info", "Request dibatalkan karena ada request baru");
           return;
       }
       setError(
         `Connection failed. Make sure FastAPI is running on ${API_BASE}. Error: ${e instanceof Error ? e.message : String(e)}`,
       );
+      appendLog("error", `Koneksi API gagal: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
       // Only set loading to false if this was the latest request
       if (abortControllerRef.current === abortController) {
@@ -143,7 +401,72 @@ export default function Dashboard() {
     selectedModel,
     startDate,
     endDate,
+    invoicePage,
+    invoicePageSize,
+    invoiceSearch,
+    invoiceSortBy,
+    invoiceSortOrder,
+    fetchCustomerRisk,
+    appendLog,
   ]);
+
+  useEffect(() => {
+    if (!computeStatus?.job_id || computeStatus.status !== "running") {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+      return;
+    }
+
+    const poll = async () => {
+      try {
+        const resp = await fetch(`${API_BASE}/db/compute/status/${computeStatus.job_id}`);
+        const data = (await resp.json()) as ComputeJobStatus & { error?: string };
+        if (!resp.ok || data.error) {
+          return;
+        }
+        setComputeStatus(data);
+        if (data.status !== lastPolledStatusRef.current) {
+          lastPolledStatusRef.current = data.status;
+          appendLog("info", `Job ${data.job_id} status: ${data.status}`);
+        }
+        if (data.status === "completed") {
+          setComputeMessage("Compute selesai. Data terbaru sedang dimuat...");
+          appendLog("info", "Compute selesai. Melakukan refresh data...");
+          await runScoring(activeEndpoint, {
+            timeRange: selectedTimeRange,
+            modelKey: selectedModel,
+            thresh: threshold,
+          });
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+        } else if (data.status === "failed") {
+          setError(`Compute failed: ${data.error_message || "Unknown error"}`);
+          appendLog("error", `Compute gagal: ${data.error_message || "Unknown error"}`);
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+        }
+      } catch {
+        // Keep polling silently; API may be temporarily busy.
+        appendLog("warn", "Polling status compute tertunda (API sibuk)");
+      }
+    };
+
+    poll();
+    pollTimerRef.current = setInterval(poll, 5000);
+
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
+    };
+  }, [computeStatus?.job_id, computeStatus?.status, activeEndpoint, runScoring, selectedTimeRange, selectedModel, threshold, appendLog]);
 
   // Auto-load on mount
   useEffect(() => {
@@ -153,12 +476,32 @@ export default function Dashboard() {
     }
   }, [initialLoaded, runScoring]);
 
-  // Auto re-score when time range or model changes
   useEffect(() => {
-    if (initialLoaded) {
-      runScoring(activeEndpoint, { timeRange: selectedTimeRange, modelKey: selectedModel });
-    }
-  }, [selectedTimeRange, selectedModel, initialLoaded, activeEndpoint, runScoring]);
+    if (!initialLoaded) return;
+    runScoring(activeEndpoint, { timeRange: selectedTimeRange, modelKey: selectedModel });
+  }, [
+    invoicePage,
+    invoiceSearch,
+    invoiceSortBy,
+    invoiceSortOrder,
+    initialLoaded,
+    activeEndpoint,
+    selectedTimeRange,
+    selectedModel,
+    runScoring,
+  ]);
+
+  useEffect(() => {
+    if (!initialLoaded) return;
+    fetchCustomerRisk();
+  }, [
+    customerPage,
+    customerSearch,
+    customerSortBy,
+    customerSortOrder,
+    initialLoaded,
+    fetchCustomerRisk,
+  ]);
 
   const downloadCsv = useCallback(async () => {
     setLoading(true);
@@ -201,18 +544,52 @@ export default function Dashboard() {
           if (abortControllerRef.current) {
               abortControllerRef.current.abort();
           }
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+        }
       };
   }, []);
 
-  // Data rows from result
-  const invoiceRows =
-    result?.preview || result?.alerts || result?.all_scores_preview || [];
-  const customerRows = result?.customer_risk || [];
+  const invoiceRows = useMemo(
+    () => selectInvoiceRows(result, activeEndpoint, threshold),
+    [result, activeEndpoint, threshold],
+  );
+
+  const displayedRiskSummary = useMemo(() => {
+    if (activeEndpoint === "score") {
+      return result?.risk_summary || null;
+    }
+    return invoiceRows.length > 0 ? summarizeRowsByRisk(invoiceRows) : null;
+  }, [activeEndpoint, result?.risk_summary, invoiceRows]);
+
+  const topEflRows = useMemo(() => {
+    const rows = result?.top_efl_invoices || [];
+    if (activeEndpoint === "score") {
+      return rows;
+    }
+    return rows.filter((row) => isNonLowRiskRow(row, threshold));
+  }, [result?.top_efl_invoices, activeEndpoint, threshold]);
+
+  const displayedCustomerRows = useMemo(() => {
+    if (activeEndpoint === "score") {
+      return customerRows;
+    }
+    return customerRows.filter((row) => isNonLowRiskRow(row, threshold));
+  }, [activeEndpoint, customerRows, threshold]);
+
+  const displayedCustomerRiskSummary = useMemo(() => {
+    if (activeEndpoint === "score") {
+      return customerRiskSummary;
+    }
+    return displayedCustomerRows.length > 0
+      ? summarizeRowsByRisk(displayedCustomerRows)
+      : null;
+  }, [activeEndpoint, customerRiskSummary, displayedCustomerRows]);
 
   return (
-    <main className="min-h-screen">
+    <main className={`min-h-screen ${terminalOpen ? "pb-80 sm:pb-96" : "pb-28"}`}>
       {/* ── Header ─── */}
-      <header className="bg-gradient-to-r from-blue-50 dark:from-blue-900/40 via-white dark:via-gray-900 to-gray-50 dark:to-gray-900 border-b border-gray-200 dark:border-gray-800">
+      <header className="fixed top-0 inset-x-0 z-40 bg-gradient-to-r from-blue-50/95 dark:from-blue-900/60 via-white/95 dark:via-gray-900/95 to-gray-50/95 dark:to-gray-900/95 border-b border-gray-200 dark:border-gray-800 backdrop-blur">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-4">
@@ -250,16 +627,22 @@ export default function Dashboard() {
               >
                 {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
               </button>
-              <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                Connected to API
+              <div 
+                className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 font-medium px-3 py-1.5 rounded-full bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700"
+                title={apiStatus === "connected" ? "Connected to API server" : apiStatus === "disconnected" ? "API server gracefully disconnected" : "Connecting..."}
+              >
+                {apiStatus === "connected" && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
+                {apiStatus === "checking" && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
+                {apiStatus === "disconnected" && <span className="w-2 h-2 rounded-full bg-rose-500" />}
+                
+                {apiStatus === "connected" ? "API Active" : apiStatus === "checking" ? "Checking API..." : "API Offline"}
               </div>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-32 sm:pt-36 py-6 space-y-6">
         {/* ── Control Panel ─── */}
         <section className="bg-white/80 dark:bg-gray-900/60 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-800 p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
@@ -274,7 +657,11 @@ export default function Dashboard() {
               <select
                 id="modelSelect"
                 value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+                onChange={(e) => {
+                  setSelectedModel(e.target.value);
+                  setInvoicePage(1);
+                  setCustomerPage(1);
+                }}
                 className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
                            text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
                 aria-label="Select Model"
@@ -295,7 +682,11 @@ export default function Dashboard() {
               <select
                 id="timeRange"
                 value={selectedTimeRange}
-                onChange={(e) => setSelectedTimeRange(e.target.value)}
+                onChange={(e) => {
+                  setSelectedTimeRange(e.target.value);
+                  setInvoicePage(1);
+                  setCustomerPage(1);
+                }}
                 className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
                            text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
                 aria-label="Select Time Range"
@@ -355,7 +746,11 @@ export default function Dashboard() {
                 value={snapshotDate}
                 min={minDate}
                 max={maxDate}
-                onChange={(e) => setSnapshotDate(e.target.value)}
+                onChange={(e) => {
+                  setSnapshotDate(e.target.value);
+                  setInvoicePage(1);
+                  setCustomerPage(1);
+                }}
                 className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
                            text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
                 aria-label="Select Snapshot Date"
@@ -386,6 +781,7 @@ export default function Dashboard() {
             <button
               onClick={() => {
                 setActiveEndpoint("score");
+                setInvoicePage(1);
                 runScoring("score");
               }}
               disabled={loading}
@@ -406,6 +802,7 @@ export default function Dashboard() {
             <button
               onClick={() => {
                 setActiveEndpoint("alerts");
+                setInvoicePage(1);
                 runScoring("alerts");
               }}
               disabled={loading}
@@ -419,6 +816,7 @@ export default function Dashboard() {
             <button
               onClick={() => {
                 setActiveEndpoint("receipt_trigger");
+                setInvoicePage(1);
                 runScoring("receipt_trigger");
               }}
               disabled={loading}
@@ -452,6 +850,14 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ── Notice ─── */}
+        {notice && !error && (
+          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-blue-700 dark:text-blue-300 text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
+            <span className="text-xl">ℹ️</span>
+            <div>{notice}</div>
+          </div>
+        )}
+
         {/* ── Warning ─── */}
         {result?.warning && (
           <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-amber-600 dark:text-amber-400 text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
@@ -468,7 +874,7 @@ export default function Dashboard() {
             <div className="text-center space-y-4">
               <div className="animate-spin w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full mx-auto" />
               <p className="text-gray-600 dark:text-gray-400 text-sm font-medium animate-pulse">
-                Querying database & running inference...
+                Loading pre-computed results...
               </p>
             </div>
           </div>
@@ -514,6 +920,30 @@ export default function Dashboard() {
                         Features:
                       </strong>{" "}
                       {result.feature_count}
+                    </span>
+                  )}
+                  {result.last_computed_at && (
+                    <span>
+                      <strong className="text-gray-800 dark:text-gray-300">
+                        Last Compute:
+                      </strong>{" "}
+                      {result.last_computed_at}
+                    </span>
+                  )}
+                  {result.job_id && (
+                    <span>
+                      <strong className="text-gray-800 dark:text-gray-300">
+                        Job ID:
+                      </strong>{" "}
+                      {result.job_id}
+                    </span>
+                  )}
+                  {result.pagination && (
+                    <span>
+                      <strong className="text-gray-800 dark:text-gray-300">
+                        Page:
+                      </strong>{" "}
+                      {result.pagination.page}/{result.pagination.total_pages} ({result.pagination.total_records} records)
                     </span>
                   )}
                 </div>
@@ -564,24 +994,24 @@ export default function Dashboard() {
             </div>
 
             {/* Risk bar */}
-            {result.risk_summary && <RiskBar summary={result.risk_summary} />}
+            {displayedRiskSummary && <RiskBar summary={displayedRiskSummary} />}
 
             {/* Top EFL table */}
-            {result.top_efl_invoices && result.top_efl_invoices.length > 0 && (
+            {topEflRows.length > 0 && (
               <div className="mb-6">
                 <DataTable
-                  rows={result.top_efl_invoices}
+                  rows={topEflRows}
                   title="Top Expected Financial Loss"
                   subtitle="Invoice dengan potensi kerugian finansial tertinggi"
                   priorityCols={[
                     "CUSTOMER_NAME",
                     "ACCOUNT_NUMBER",
                     "CUSTOMER_TRX_ID",
+                    "TRX_DATE",
+                    "days_to_due",
                     "expected_financial_loss",
                     "prob_bad_debt",
                     "TRX_AMOUNT",
-                    "DUE_DATE",
-                    "TRX_DATE",
                     "risk_level",
                     "recommended_action",
                   ]}
@@ -590,18 +1020,42 @@ export default function Dashboard() {
             )}
 
             {/* Invoice table */}
+            {invoiceRows.length === 0 && (
+              <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/50 dark:bg-gray-900/40 p-6 text-sm text-gray-600 dark:text-gray-400 text-center">
+                Tidak ada invoice yang cocok dengan filter saat ini.
+              </div>
+            )}
+
             {invoiceRows.length > 0 && (
               <DataTable
                 rows={invoiceRows}
                 title="Invoice Scores"
                 subtitle="Hasil prediksi per invoice"
+                isServerMode={activeEndpoint === "score"}
+                serverPagination={invoicePagination}
+                serverSearch={invoiceSearch}
+                onSearchChange={(value) => {
+                  setInvoiceSearch(value);
+                  setInvoicePage(1);
+                }}
+                serverSort={{ key: invoiceSortBy, direction: invoiceSortOrder }}
+                onSortChange={(key, direction) => {
+                  if (!direction) {
+                    setInvoiceSortBy("prob_bad_debt");
+                    setInvoiceSortOrder("desc");
+                  } else {
+                    setInvoiceSortBy(key);
+                    setInvoiceSortOrder(direction);
+                  }
+                }}
+                onPageChange={(page) => setInvoicePage(page)}
                 priorityCols={[
                   "CUSTOMER_NAME",
                   "ACCOUNT_NUMBER",
                   "CUSTOMER_TRX_ID",
-                  "TRX_AMOUNT",
-                  "DUE_DATE",
                   "TRX_DATE",
+                  "days_to_due",
+                  "TRX_AMOUNT",
                   "paid_ratio",
                   "n_pay_pre_due",
                   "party_prior_bd90_cnt",
@@ -613,7 +1067,7 @@ export default function Dashboard() {
             )}
 
             {/* Customer risk section */}
-            {customerRows.length > 0 && (
+            {displayedCustomerRows.length > 0 && (
               <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-800">
                 <div className="flex items-center gap-3">
                   <h2 className="text-lg font-bold text-gray-900 dark:text-white">👥 Customer Risk</h2>
@@ -623,34 +1077,38 @@ export default function Dashboard() {
                 </div>
 
                 {/* Customer risk summary */}
-                {result.customer_risk_summary && (
+                {displayedCustomerRiskSummary && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 xl:gap-4">
                     <StatCard
                       icon="👥"
                       label="Total Customers"
-                      value={customerRows.length}
+                      value={
+                        activeEndpoint === "score"
+                          ? customerPagination.total_records || customerRows.length
+                          : displayedCustomerRows.length
+                      }
                     />
-                    {result.customer_risk_summary.HIGH != null && (
+                    {displayedCustomerRiskSummary.HIGH != null && (
                       <StatCard
                         icon="🔴"
                         label="High Risk"
-                        value={result.customer_risk_summary.HIGH}
+                        value={displayedCustomerRiskSummary.HIGH}
                         variant="danger"
                       />
                     )}
-                    {result.customer_risk_summary.MEDIUM != null && (
+                    {displayedCustomerRiskSummary.MEDIUM != null && (
                       <StatCard
                         icon="🟠"
                         label="Medium Risk"
-                        value={result.customer_risk_summary.MEDIUM}
+                        value={displayedCustomerRiskSummary.MEDIUM}
                         variant="warning"
                       />
                     )}
-                    {result.customer_risk_summary.LOW != null && (
+                    {displayedCustomerRiskSummary.LOW != null && (
                       <StatCard
                         icon="🟢"
                         label="Low Risk"
-                        value={result.customer_risk_summary.LOW}
+                        value={displayedCustomerRiskSummary.LOW}
                         variant="success"
                       />
                     )}
@@ -659,9 +1117,27 @@ export default function Dashboard() {
 
                 {/* Customer risk table */}
                 <DataTable
-                  rows={customerRows}
+                  rows={displayedCustomerRows}
                   title="Customer Risk List"
                   subtitle="List customer berisiko berdasarkan agregasi invoice-level predictions"
+                  isServerMode={activeEndpoint === "score"}
+                  serverPagination={customerPagination}
+                  serverSearch={customerSearch}
+                  onSearchChange={(value) => {
+                    setCustomerSearch(value);
+                    setCustomerPage(1);
+                  }}
+                  serverSort={{ key: customerSortBy, direction: customerSortOrder }}
+                  onSortChange={(key, direction) => {
+                    if (!direction) {
+                      setCustomerSortBy("cust_score_max");
+                      setCustomerSortOrder("desc");
+                    } else {
+                      setCustomerSortBy(key);
+                      setCustomerSortOrder(direction);
+                    }
+                  }}
+                  onPageChange={(page) => setCustomerPage(page)}
                   priorityCols={[
                     "CUSTOMER_NAME",
                     "ACCOUNT_NUMBER",
@@ -704,8 +1180,7 @@ export default function Dashboard() {
               Ready to Analyze
             </h3>
             <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-md leading-relaxed">
-              Pilih konfigurasi dan threshold di control panel atas, lalu klik tombol <strong className="text-gray-700 dark:text-gray-300">Refresh Scoring</strong> untuk melihat
-              hasil prediksi bad debt terbaru dari database.
+              Sistem akan mencoba memuat hasil filter secara otomatis. Jika data belum tersedia, compute akan dijalankan di background dan progresnya dapat dilihat pada panel Terminal Proses Backend.
             </p>
           </div>
         )}
@@ -722,6 +1197,65 @@ export default function Dashboard() {
           </div>
         </div>
       </footer>
+
+      {/* ── Fixed Process Terminal ─── */}
+      <div className="fixed bottom-0 inset-x-0 z-50 pointer-events-none">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3 pointer-events-auto">
+          <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shadow-2xl backdrop-blur overflow-hidden">
+            <button
+              onClick={() => setTerminalOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-gray-800/70 transition-colors"
+            >
+              <span>Terminal Proses Backend</span>
+              <span className="text-xs text-gray-500">{terminalOpen ? "Hide" : "Show"}</span>
+            </button>
+
+            {terminalOpen && (
+              <div className="border-t border-gray-200 dark:border-gray-800 p-3 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-gray-500">
+                  <span>
+                    {computeStatus?.job_id
+                      ? `Job: ${computeStatus.job_id} • Status: ${computeStatus.status}`
+                      : "Belum ada job compute aktif"}
+                  </span>
+                  <button
+                    onClick={() => setProcessLogs([])}
+                    className="self-start sm:self-auto px-3 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
+                  >
+                    Clear Logs
+                  </button>
+                </div>
+                <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-950 text-gray-100 p-3 h-44 sm:h-56 overflow-y-auto font-mono text-xs">
+                  {processLogs.length === 0 ? (
+                    <div className="text-gray-400">[info] Menunggu aktivitas backend...</div>
+                  ) : (
+                    processLogs.map((log, idx) => (
+                      <div key={`${log.ts}-${idx}`} className="whitespace-pre-wrap break-words">
+                        <span className="text-gray-400">[{log.ts}]</span>{" "}
+                        <span
+                          className={
+                            log.level === "error"
+                              ? "text-rose-300"
+                              : log.level === "warn"
+                                ? "text-amber-300"
+                                : "text-emerald-300"
+                          }
+                        >
+                          [{log.level}]
+                        </span>{" "}
+                        <span>{log.message}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+                {computeMessage && (
+                  <p className="text-xs text-violet-700 dark:text-violet-300">{computeMessage}</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
     </main>
   );
 }

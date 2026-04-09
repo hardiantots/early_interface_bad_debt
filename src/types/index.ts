@@ -3,6 +3,29 @@ export interface TimeRange {
   label: string;
 }
 
+export interface PaginationMeta {
+  page: number;
+  page_size: number;
+  total_records: number;
+  total_pages: number;
+}
+
+export interface ComputeJobStatus {
+  job_id: string;
+  status: "running" | "completed" | "failed";
+  error_message?: string | null;
+  started_at?: string;
+  completed_at?: string | null;
+  duration_sec?: number | null;
+}
+
+export interface ComputeTriggerResponse {
+  job_id?: string;
+  status: "running";
+  message?: string;
+  status_url?: string;
+}
+
 export interface ScoringResult {
   mode?: string;
   analysis_type?: string;
@@ -26,6 +49,9 @@ export interface ScoringResult {
   top_efl_invoices?: Record<string, unknown>[];
   customer_risk_summary?: Record<string, number>;
   customer_risk?: Record<string, unknown>[];
+  pagination?: PaginationMeta;
+  last_computed_at?: string;
+  job_id?: string;
   warning?: string;
   error?: string;
 }

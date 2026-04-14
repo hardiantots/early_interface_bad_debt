@@ -14,10 +14,11 @@ export function fmtProb(p: unknown): string {
 }
 
 export function riskColor(level: string): string {
-  if (level === "HIGH") return "bg-red-500/20 text-red-400 border-red-500/30";
+  if (level === "HIGH")
+    return "bg-red-100 text-red-700 border-red-300 dark:bg-red-500/20 dark:text-red-400 dark:border-red-500/30";
   if (level === "MEDIUM")
-    return "bg-amber-500/20 text-amber-400 border-amber-500/30";
-  return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
+    return "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-500/20 dark:text-amber-400 dark:border-amber-500/30";
+  return "bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-400 dark:border-emerald-500/30";
 }
 
 const NICE_HEADERS: Record<string, string> = {
@@ -33,6 +34,7 @@ const NICE_HEADERS: Record<string, string> = {
   prob_bad_debt: "Probability",
   risk_level: "Risk",
   risk_cust: "Risk",
+  risk_ew: "Risk EW",
   recommended_action: "Action",
   paid_ratio: "Paid %",
   n_pay_pre_due: "Payments",

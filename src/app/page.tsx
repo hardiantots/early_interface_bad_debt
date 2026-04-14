@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Image from "next/image";
 import { StatCard } from "@/components/ui/StatCard";
 import { RiskBar } from "@/components/ui/RiskBar";
+import { RiskDonut } from "@/components/ui/RiskDonut";
+import { EflBarChart } from "@/components/ui/EflBarChart";
+import { ScoreDistribution } from "@/components/ui/ScoreDistribution";
 import { DataTable } from "@/components/ui/DataTable";
 import {
   ComputeJobStatus,
@@ -96,6 +99,7 @@ export default function Dashboard() {
     total_pages: 1,
   };
 
+  // ── Preferences ──────────────────────────────────────────────────────
   const [timeRanges, setTimeRanges] = useState<TimeRange[]>([
     { key: "1w", label: "1 minggu terakhir" },
     { key: "2w", label: "2 minggu terakhir" },
@@ -106,26 +110,19 @@ export default function Dashboard() {
     { key: "all", label: "Semua data (terlama s/d terbaru)" },
   ]);
   const [selectedTimeRange, setSelectedTimeRange] = useState("1w");
-  const [models, setModels] = useState<{key: string, label: string}[]>([]);
+  const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState("stacked");
   const [snapshotDate, setSnapshotDate] = useState(getTodayISO());
   const [minDate, setMinDate] = useState("");
   const [maxDate, setMaxDate] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [theme, setTheme] = useState<"light" | "dark">("dark");
+  // Light theme is the default
+  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [apiStatus, setApiStatus] = useState<"connected" | "disconnected" | "checking">("checking");
-
-  useEffect(() => {
-    if (theme === "dark") {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  }, [theme]);
   const [threshold, setThreshold] = useState(0.3);
 
-  // UI state
+  // ── UI State ──────────────────────────────────────────────────────────
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -150,18 +147,28 @@ export default function Dashboard() {
   const [processLogs, setProcessLogs] = useState<ProcessLog[]>([]);
   const [activeEndpoint, setActiveEndpoint] = useState<EndpointMode>("score");
   const [initialLoaded, setInitialLoaded] = useState(false);
+  const [activeTab, setActiveTab] = useState<"invoice" | "customer">("invoice");
 
-  // AbortController ref to handle race conditions
+  // ── Refs ──────────────────────────────────────────────────────────────
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
   const scoreRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastPolledStatusRef = useRef<string | null>(null);
+  const terminalBodyRef = useRef<HTMLDivElement | null>(null);
 
+  // ── Theme ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (theme === "dark") {
+      document.documentElement.classList.add("dark");
+    } else {
+      document.documentElement.classList.remove("dark");
+    }
+  }, [theme]);
+
+  // ── Logging ───────────────────────────────────────────────────────────
   const appendLog = useCallback(
     (level: ProcessLog["level"], message: string) => {
-      const ts = new Date().toLocaleTimeString("id-ID", {
-        hour12: false,
-      });
+      const ts = new Date().toLocaleTimeString("id-ID", { hour12: false });
       setProcessLogs((prev) => {
         const next = [...prev, { ts, level, message }];
         return next.slice(-120);
@@ -170,30 +177,30 @@ export default function Dashboard() {
     [],
   );
 
-  // Monitor API Status
+  // Auto-scroll terminal to bottom
+  useEffect(() => {
+    if (terminalOpen && terminalBodyRef.current) {
+      terminalBodyRef.current.scrollTop = terminalBodyRef.current.scrollHeight;
+    }
+  }, [processLogs, terminalOpen]);
+
+  // ── API Status Monitor ────────────────────────────────────────────────
   useEffect(() => {
     const checkApi = async () => {
       try {
         const res = await fetch(`${API_BASE}/health`, { method: "GET" });
-        if (res.ok) {
-          setApiStatus("connected");
-        } else {
-          setApiStatus("disconnected");
-        }
-      } catch (err) {
+        setApiStatus(res.ok ? "connected" : "disconnected");
+      } catch {
         setApiStatus("disconnected");
       }
     };
-    
-    // Initial check
+
     checkApi();
-    
-    // Check every 15 seconds
     const interval = setInterval(checkApi, 15000);
     return () => clearInterval(interval);
   }, []);
 
-  // Load models and time ranges from API config
+  // ── Load Config from API ──────────────────────────────────────────────
   useEffect(() => {
     fetch(`${API_BASE}/models`)
       .then((r) => r.json())
@@ -204,17 +211,18 @@ export default function Dashboard() {
         }
         if (data.time_ranges) setTimeRanges(data.time_ranges);
         if (data.min_date) {
-            setMinDate(data.min_date);
-            setStartDate(prev => prev || data.min_date);
+          setMinDate(data.min_date);
+          setStartDate((prev) => prev || data.min_date);
         }
         if (data.max_date) {
-            setMaxDate(data.max_date);
-            setEndDate(prev => prev || data.max_date);
+          setMaxDate(data.max_date);
+          setEndDate((prev) => prev || data.max_date);
         }
       })
       .catch(() => {});
   }, []);
 
+  // ── Fetch Customer Risk ───────────────────────────────────────────────
   const fetchCustomerRisk = useCallback(
     async (opts?: {
       timeRange?: string;
@@ -246,7 +254,6 @@ export default function Dashboard() {
         params.set("start_date", startDate);
         params.set("end_date", endDate);
       }
-      
       if (search.trim()) {
         params.set("search", search.trim());
       }
@@ -264,7 +271,9 @@ export default function Dashboard() {
           if (data.job_id) {
             return { job_id: data.job_id, status: "running" };
           }
-          return prev?.job_id ? { job_id: prev.job_id, status: "running" } : prev;
+          return prev?.job_id
+            ? { job_id: prev.job_id, status: "running" }
+            : prev;
         });
         setComputeMessage(
           data.message || "Customer risk sedang dipersiapkan di background.",
@@ -276,7 +285,7 @@ export default function Dashboard() {
         return;
       }
 
-      if (!resp.ok || data.error) {
+      if (!resp.ok || (data as { error?: string }).error) {
         setCustomerRows([]);
         setCustomerRiskSummary(null);
         setCustomerPagination(defaultPagination);
@@ -288,9 +297,10 @@ export default function Dashboard() {
         return;
       }
 
-      setCustomerRows(data.customer_risk || []);
-      setCustomerRiskSummary(data.customer_risk_summary || null);
-      setCustomerPagination(data.pagination || defaultPagination);
+      const scoringData = data as ScoringResult;
+      setCustomerRows(scoringData.customer_risk || []);
+      setCustomerRiskSummary(scoringData.customer_risk_summary || null);
+      setCustomerPagination(scoringData.pagination || defaultPagination);
     },
     [
       selectedTimeRange,
@@ -307,14 +317,13 @@ export default function Dashboard() {
     ],
   );
 
-  
-  
+  // ── Trigger Compute ───────────────────────────────────────────────────
   const triggerCompute = useCallback(async () => {
     setLoading(true);
     setNotice("Memicu perhitungan data terbaru...");
     setError(null);
-    appendLog("info", `Manual trigger compute started.`);
-    
+    appendLog("info", "Manual trigger compute started.");
+
     try {
       const params = new URLSearchParams({
         model: selectedModel,
@@ -325,12 +334,12 @@ export default function Dashboard() {
         params.set("start_date", startDate);
         params.set("end_date", endDate);
       }
-      
+
       const resp = await fetch(`${API_BASE}/db/compute?${params}`, {
         method: "POST",
       });
       const data = await resp.json();
-      
+
       if (resp.status === 202 || resp.ok) {
         setComputeStatus({ job_id: data.job_id, status: "running" });
         setComputeMessage(data.message || "Compute berjalan di background...");
@@ -339,172 +348,180 @@ export default function Dashboard() {
         setNotice("Compute task gagal didaftarkan.");
         setLoading(false);
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
     }
   }, [selectedModel, selectedTimeRange, snapshotDate, startDate, endDate, appendLog]);
 
-  const runScoring = useCallback(async (
-    endpoint: "score" | "alerts" | "receipt_trigger" = "score",
-    opts?: { timeRange?: string; thresh?: number; modelKey?: string },
-  ) => {
-    if (scoreRetryTimerRef.current) {
-      clearTimeout(scoreRetryTimerRef.current);
-      scoreRetryTimerRef.current = null;
-    }
+  // ── Run Scoring ───────────────────────────────────────────────────────
+  const runScoring = useCallback(
+    async (
+      endpoint: "score" | "alerts" | "receipt_trigger" = "score",
+      opts?: { timeRange?: string; thresh?: number; modelKey?: string },
+    ) => {
+      if (scoreRetryTimerRef.current) {
+        clearTimeout(scoreRetryTimerRef.current);
+        scoreRetryTimerRef.current = null;
+      }
 
-    // Cancel previous request if any
-    if (abortControllerRef.current) {
+      if (abortControllerRef.current) {
         abortControllerRef.current.abort();
-    }
-    
-    const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+      }
 
-    setLoading(true);
-    setError(null);
-    setNotice(null);
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
-    const tr = opts?.timeRange ?? selectedTimeRange;
-    const th = opts?.thresh ?? threshold;
-    const mk = opts?.modelKey ?? selectedModel;
+      setLoading(true);
+      setError(null);
+      setNotice(null);
 
-    const params = new URLSearchParams({
-      model: mk,
-      snapshot_date: snapshotDate,
-      time_range: tr,
-      page: String(invoicePage),
-      page_size: String(invoicePageSize),
-      sort_by: invoiceSortBy,
-      sort_order: invoiceSortOrder,
-    });
-    if (tr === "custom") {
+      const tr = opts?.timeRange ?? selectedTimeRange;
+      const th = opts?.thresh ?? threshold;
+      const mk = opts?.modelKey ?? selectedModel;
+
+      const params = new URLSearchParams({
+        model: mk,
+        snapshot_date: snapshotDate,
+        time_range: tr,
+        page: String(invoicePage),
+        page_size: String(invoicePageSize),
+        sort_by: invoiceSortBy,
+        sort_order: invoiceSortOrder,
+      });
+      if (tr === "custom") {
         params.set("start_date", startDate);
         params.set("end_date", endDate);
-    }
-    if (invoiceSearch.trim()) {
-      params.set("search", invoiceSearch.trim());
-    }
-
-    let path = "/db/score";
-    if (endpoint === "alerts") {
-      path = "/db/alerts";
-      params.set("threshold", String(th));
-    } else if (endpoint === "receipt_trigger") {
-      path = "/db/early_warning/receipt_trigger";
-    }
-
-    // Auto-bootstrap compute if data doesn't exist for current filter/mode.
-    
-
-    appendLog("info", `Request ${endpoint} dimulai (range=${tr}, model=${mk})`);
-
-    try {
-      const resp = await fetch(`${API_BASE}${path}?${params}`, {
-          signal: abortController.signal
-      });
-      const data = (await resp.json()) as ScoringResult & ComputeTriggerResponse;
-
-      if (resp.status === 202 && data.status === "running") {
-        setNotice("Data belum tersedia. Sistem sedang menyiapkan hasil compute.");
-        setComputeStatus((prev) => {
-          if (data.job_id) {
-            return { job_id: data.job_id, status: "running" };
-          }
-          return prev?.job_id ? { job_id: prev.job_id, status: "running" } : prev;
-        });
-        setComputeMessage(
-          data.message || "Compute sedang berjalan. Menunggu hasil pertama...",
-        );
-        appendLog("info", data.message || "Compute berjalan di background");
-
-        // Keep probing score endpoint because running job can be unrelated.
-        scoreRetryTimerRef.current = setTimeout(() => {
-          runScoring(endpoint, { timeRange: tr, modelKey: mk, thresh: th });
-        }, 4000);
-        return;
+      }
+      if (invoiceSearch.trim()) {
+        params.set("search", invoiceSearch.trim());
       }
 
-      if (!resp.ok) {
-        if (resp.status === 404 && data.error?.includes("No pre-computed")) {
-          setResult(null);
-          setCustomerRows([]);
-          setCustomerRiskSummary(null);
-          setInvoicePagination(defaultPagination);
-          setCustomerPagination(defaultPagination);
-          setNotice("Data untuk filter ini belum tersedia. Sistem akan menyiapkan compute otomatis.");
-          appendLog("warn", "Data belum ada untuk filter saat ini");
+      let path = "/db/score";
+      if (endpoint === "alerts") {
+        path = "/db/alerts";
+        params.set("threshold", String(th));
+      } else if (endpoint === "receipt_trigger") {
+        path = "/db/early_warning/receipt_trigger";
+      }
+
+      appendLog("info", `Request ${endpoint} dimulai (range=${tr}, model=${mk})`);
+
+      try {
+        const resp = await fetch(`${API_BASE}${path}?${params}`, {
+          signal: abortController.signal,
+        });
+        const data = (await resp.json()) as ScoringResult & ComputeTriggerResponse;
+
+        if (resp.status === 202 && data.status === "running") {
+          setNotice("Data belum tersedia. Sistem sedang menyiapkan hasil compute.");
+          setComputeStatus((prev) => {
+            if (data.job_id) {
+              return { job_id: data.job_id, status: "running" };
+            }
+            return prev?.job_id
+              ? { job_id: prev.job_id, status: "running" }
+              : prev;
+          });
+          setComputeMessage(
+            data.message || "Compute sedang berjalan. Menunggu hasil pertama...",
+          );
+          appendLog("info", data.message || "Compute berjalan di background");
+
+          scoreRetryTimerRef.current = setTimeout(() => {
+            runScoring(endpoint, { timeRange: tr, modelKey: mk, thresh: th });
+          }, 4000);
           return;
         }
-        setError(data.error || `Request failed (${resp.status})`);
-        appendLog("error", data.error || `Request gagal (${resp.status})`);
-        return;
-      }
-      if (data.error) {
-        setError(data.error);
-        appendLog("error", data.error);
-      } else {
-        if (scoreRetryTimerRef.current) {
-          clearTimeout(scoreRetryTimerRef.current);
-          scoreRetryTimerRef.current = null;
+
+        if (!resp.ok) {
+          if (resp.status === 404 && data.error?.includes("No pre-computed")) {
+            setResult(null);
+            setCustomerRows([]);
+            setCustomerRiskSummary(null);
+            setInvoicePagination(defaultPagination);
+            setCustomerPagination(defaultPagination);
+            setNotice(
+              "Data untuk filter ini belum tersedia. Sistem akan menyiapkan compute otomatis.",
+            );
+            appendLog("warn", "Data belum ada untuk filter saat ini");
+            return;
+          }
+          setError(data.error || `Request failed (${resp.status})`);
+          appendLog("error", data.error || `Request gagal (${resp.status})`);
+          return;
         }
-        setResult(data);
-        setInvoicePagination(data.pagination || defaultPagination);
-        await fetchCustomerRisk({ timeRange: tr, modelKey: mk });
-        const effectiveSnapshot = data.effective_snapshot_date || data.snapshot_date;
-        if (effectiveSnapshot && effectiveSnapshot !== snapshotDate) {
-          setNotice(
-            `Data prediksi dibaca dari publish terbaru (snapshot efektif ${effectiveSnapshot}).`,
-          );
-          appendLog(
-            "warn",
-            `Snapshot efektif dari MySQL publish: ${effectiveSnapshot} (request: ${snapshotDate})`,
-          );
-        }
-        const rowsLen =
-          (data.preview?.length || 0) +
-          (data.alerts?.length || 0) +
-          (data.all_scores_preview?.length || 0);
-        if (rowsLen === 0) {
-          setNotice("Tidak ada data untuk filter ini.");
-          appendLog("warn", "Fetch sukses namun tidak ada data yang cocok");
+
+        if (data.error) {
+          setError(data.error);
+          appendLog("error", data.error);
         } else {
-          setNotice(null);
-          appendLog("info", `Fetch sukses: ${rowsLen} baris dimuat`);
+          if (scoreRetryTimerRef.current) {
+            clearTimeout(scoreRetryTimerRef.current);
+            scoreRetryTimerRef.current = null;
+          }
+          setResult(data);
+          setInvoicePagination(data.pagination || defaultPagination);
+          await fetchCustomerRisk({ timeRange: tr, modelKey: mk });
+          const effectiveSnapshot =
+            data.effective_snapshot_date || data.snapshot_date;
+          if (effectiveSnapshot && effectiveSnapshot !== snapshotDate) {
+            setNotice(
+              `Data prediksi dibaca dari publish terbaru (snapshot efektif ${effectiveSnapshot}).`,
+            );
+            appendLog(
+              "warn",
+              `Snapshot efektif dari MySQL publish: ${effectiveSnapshot} (request: ${snapshotDate})`,
+            );
+          }
+          const rowsLen =
+            (data.preview?.length || 0) +
+            (data.alerts?.length || 0) +
+            (data.all_scores_preview?.length || 0);
+          if (rowsLen === 0) {
+            setNotice("Tidak ada data untuk filter ini.");
+            appendLog("warn", "Fetch sukses namun tidak ada data yang cocok");
+          } else {
+            setNotice(null);
+            appendLog("info", `Fetch sukses: ${rowsLen} baris dimuat`);
+          }
         }
-      }
-    } catch (e) {
-      if (e instanceof Error && e.name === 'AbortError') {
+      } catch (e) {
+        if (e instanceof Error && e.name === "AbortError") {
           appendLog("info", "Request dibatalkan karena ada request baru");
           return;
-      }
-      setError(
-        `Connection failed. Make sure FastAPI is running on ${API_BASE}. Error: ${e instanceof Error ? e.message : String(e)}`,
-      );
-      appendLog("error", `Koneksi API gagal: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      // Only set loading to false if this was the latest request
-      if (abortControllerRef.current === abortController) {
+        }
+        setError(
+          `Connection failed. Make sure FastAPI is running on ${API_BASE}. Error: ${e instanceof Error ? e.message : String(e)}`,
+        );
+        appendLog(
+          "error",
+          `Koneksi API gagal: ${e instanceof Error ? e.message : String(e)}`,
+        );
+      } finally {
+        if (abortControllerRef.current === abortController) {
           setLoading(false);
+        }
       }
-    }
-  }, [
-    snapshotDate,
-    selectedTimeRange,
-    threshold,
-    selectedModel,
-    startDate,
-    endDate,
-    invoicePage,
-    invoicePageSize,
-    invoiceSearch,
-    invoiceSortBy,
-    invoiceSortOrder,
-    fetchCustomerRisk,
-    appendLog,
-  ]);
+    },
+    [
+      snapshotDate,
+      selectedTimeRange,
+      threshold,
+      selectedModel,
+      startDate,
+      endDate,
+      invoicePage,
+      invoicePageSize,
+      invoiceSearch,
+      invoiceSortBy,
+      invoiceSortOrder,
+      fetchCustomerRisk,
+      appendLog,
+    ],
+  );
 
+  // ── Compute Polling ───────────────────────────────────────────────────
   useEffect(() => {
     if (!computeStatus?.job_id || computeStatus.status !== "running") {
       if (pollTimerRef.current) {
@@ -516,11 +533,14 @@ export default function Dashboard() {
 
     const poll = async () => {
       try {
-        const resp = await fetch(`${API_BASE}/db/compute/status/${computeStatus.job_id}`);
-        const data = (await resp.json()) as ComputeJobStatus & { error?: string };
-        if (!resp.ok || data.error) {
-          return;
-        }
+        const resp = await fetch(
+          `${API_BASE}/db/compute/status/${computeStatus.job_id}`,
+        );
+        const data = (await resp.json()) as ComputeJobStatus & {
+          error?: string;
+        };
+        if (!resp.ok || data.error) return;
+
         setComputeStatus(data);
         if (data.status !== lastPolledStatusRef.current) {
           lastPolledStatusRef.current = data.status;
@@ -540,14 +560,16 @@ export default function Dashboard() {
           }
         } else if (data.status === "failed") {
           setError(`Compute failed: ${data.error_message || "Unknown error"}`);
-          appendLog("error", `Compute gagal: ${data.error_message || "Unknown error"}`);
+          appendLog(
+            "error",
+            `Compute gagal: ${data.error_message || "Unknown error"}`,
+          );
           if (pollTimerRef.current) {
             clearInterval(pollTimerRef.current);
             pollTimerRef.current = null;
           }
         }
       } catch {
-        // Keep polling silently; API may be temporarily busy.
         appendLog("warn", "Polling status compute tertunda (API sibuk)");
       }
     };
@@ -561,9 +583,18 @@ export default function Dashboard() {
         pollTimerRef.current = null;
       }
     };
-  }, [computeStatus?.job_id, computeStatus?.status, activeEndpoint, runScoring, selectedTimeRange, selectedModel, threshold, appendLog]);
+  }, [
+    computeStatus?.job_id,
+    computeStatus?.status,
+    activeEndpoint,
+    runScoring,
+    selectedTimeRange,
+    selectedModel,
+    threshold,
+    appendLog,
+  ]);
 
-  // Auto-load on mount
+  // ── Auto-Load on Mount ────────────────────────────────────────────────
   useEffect(() => {
     if (!initialLoaded) {
       setInitialLoaded(true);
@@ -571,9 +602,13 @@ export default function Dashboard() {
     }
   }, [initialLoaded, runScoring]);
 
+  // ── Re-fetch on Filter Change ─────────────────────────────────────────
   useEffect(() => {
     if (!initialLoaded) return;
-    runScoring(activeEndpoint, { timeRange: selectedTimeRange, modelKey: selectedModel });
+    runScoring(activeEndpoint, {
+      timeRange: selectedTimeRange,
+      modelKey: selectedModel,
+    });
   }, [
     invoicePage,
     invoiceSearch,
@@ -598,6 +633,7 @@ export default function Dashboard() {
     fetchCustomerRisk,
   ]);
 
+  // ── CSV Download ──────────────────────────────────────────────────────
   const downloadCsv = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -607,8 +643,8 @@ export default function Dashboard() {
       time_range: selectedTimeRange,
     });
     if (selectedTimeRange === "custom") {
-        params.set("start_date", startDate);
-        params.set("end_date", endDate);
+      params.set("start_date", startDate);
+      params.set("end_date", endDate);
     }
     try {
       const resp = await fetch(`${API_BASE}/db/score_csv?${params}`);
@@ -633,21 +669,22 @@ export default function Dashboard() {
     }
   }, [snapshotDate, selectedTimeRange, selectedModel, startDate, endDate]);
 
-  // Cleanup on unmount
+  // ── Cleanup ───────────────────────────────────────────────────────────
   useEffect(() => {
-      return () => {
-          if (abortControllerRef.current) {
-              abortControllerRef.current.abort();
-          }
-        if (pollTimerRef.current) {
-          clearInterval(pollTimerRef.current);
-        }
-        if (scoreRetryTimerRef.current) {
-          clearTimeout(scoreRetryTimerRef.current);
-        }
-      };
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
+      if (scoreRetryTimerRef.current) {
+        clearTimeout(scoreRetryTimerRef.current);
+      }
+    };
   }, []);
 
+  // ── Derived State ─────────────────────────────────────────────────────
   const invoiceRows = useMemo(
     () => selectInvoiceRows(result, activeEndpoint, threshold),
     [result, activeEndpoint, threshold],
@@ -662,34 +699,37 @@ export default function Dashboard() {
 
   const topEflRows = useMemo(() => {
     const rows = result?.top_efl_invoices || [];
-    if (activeEndpoint === "score") {
-      return rows;
-    }
+    if (activeEndpoint === "score") return rows;
     return rows.filter((row) => isNonLowRiskRow(row, threshold));
   }, [result?.top_efl_invoices, activeEndpoint, threshold]);
 
   const displayedCustomerRows = useMemo(() => {
-    if (activeEndpoint === "score") {
-      return customerRows;
-    }
+    if (activeEndpoint === "score") return customerRows;
     return customerRows.filter((row) => isNonLowRiskRow(row, threshold));
   }, [activeEndpoint, customerRows, threshold]);
 
   const displayedCustomerRiskSummary = useMemo(() => {
-    if (activeEndpoint === "score") {
-      return customerRiskSummary;
-    }
+    if (activeEndpoint === "score") return customerRiskSummary;
     return displayedCustomerRows.length > 0
       ? summarizeRowsByRisk(displayedCustomerRows)
       : null;
   }, [activeEndpoint, customerRiskSummary, displayedCustomerRows]);
 
+  const hasCharts =
+    (displayedRiskSummary && Object.keys(displayedRiskSummary).length > 0) ||
+    topEflRows.length > 0 ||
+    invoiceRows.length > 0;
+
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
-    <main className={`min-h-screen ${terminalOpen ? "pb-80 sm:pb-96" : "pb-28"}`}>
+    <main
+      className={`min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 ${terminalOpen ? "pb-80 sm:pb-96" : "pb-28"}`}
+    >
       {/* ── Header ─── */}
-      <header className="fixed top-0 inset-x-0 z-40 bg-gradient-to-r from-blue-50/95 dark:from-blue-900/60 via-white/95 dark:via-gray-900/95 to-gray-50/95 dark:to-gray-900/95 border-b border-gray-200 dark:border-gray-800 backdrop-blur">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <header className="fixed top-0 inset-x-0 z-40 bg-white/95 dark:bg-gray-900/95 border-b border-gray-200 dark:border-gray-800 backdrop-blur shadow-sm">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            {/* Branding */}
             <div className="flex items-center gap-4">
               <Image
                 src={
@@ -698,58 +738,82 @@ export default function Dashboard() {
                     : "/kalla_logo_new.png"
                 }
                 alt="Kalla Group"
-                width={140}
-                height={56}
-                className="h-12 sm:h-14 w-auto object-contain"
+                width={130}
+                height={52}
+                className="h-10 sm:h-12 w-auto object-contain"
                 priority
               />
-              <div>
+              <div className="min-w-0">
                 <p className="text-blue-600 dark:text-blue-400 text-xs font-semibold tracking-widest uppercase">
                   Early-Warning System
                 </p>
-                <h1 className="text-2xl sm:text-3xl font-extrabold bg-gradient-to-r from-gray-900 to-gray-500 dark:from-white dark:to-gray-400 bg-clip-text text-transparent">
+                <h1 className="text-xl sm:text-2xl font-extrabold text-gray-900 dark:text-white truncate">
                   Bad Debt Risk Console
                 </h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  Deteksi dini risiko bad debt · Data langsung dari database
-                </p>
               </div>
             </div>
-            <div className="flex items-center gap-4">
+
+            {/* Controls */}
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+              {/* API Status */}
+              <div
+                className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300"
+                title={
+                  apiStatus === "connected"
+                    ? "Connected to API server"
+                    : apiStatus === "disconnected"
+                      ? "API server offline"
+                      : "Connecting..."
+                }
+              >
+                {apiStatus === "connected" && (
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                )}
+                {apiStatus === "checking" && (
+                  <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                )}
+                {apiStatus === "disconnected" && (
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                )}
+                <span className="hidden sm:inline">
+                  {apiStatus === "connected"
+                    ? "API Active"
+                    : apiStatus === "checking"
+                      ? "Checking..."
+                      : "API Offline"}
+                </span>
+              </div>
+
+              {/* Theme Toggle */}
               <button
                 onClick={() =>
                   setTheme((t) => (t === "dark" ? "light" : "dark"))
                 }
-                className="p-2 rounded-lg bg-gray-200 text-gray-700 dark:bg-gray-800 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-700 transition"
+                className="p-2 rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                 title="Toggle Theme"
+                aria-label="Toggle dark/light theme"
               >
-                {theme === "dark" ? "☀️ Light" : "🌙 Dark"}
+                {theme === "dark" ? "☀️" : "🌙"}
               </button>
-              <div 
-                className="flex items-center gap-2 text-xs text-gray-700 dark:text-gray-300 font-medium px-3 py-1.5 rounded-full bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700"
-                title={apiStatus === "connected" ? "Connected to API server" : apiStatus === "disconnected" ? "API server gracefully disconnected" : "Connecting..."}
-              >
-                {apiStatus === "connected" && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
-                {apiStatus === "checking" && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
-                {apiStatus === "disconnected" && <span className="w-2 h-2 rounded-full bg-rose-500" />}
-                
-                {apiStatus === "connected" ? "API Active" : apiStatus === "checking" ? "Checking API..." : "API Offline"}
-              </div>
             </div>
           </div>
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-32 sm:pt-36 py-6 space-y-6">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-28 sm:pt-28 py-6 space-y-6">
         {/* ── Control Panel ─── */}
-        <section className="bg-white/80 dark:bg-gray-900/60 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-800 p-5 shadow-sm">
+        <section className="bg-white dark:bg-gray-900/60 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-800 p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
-            Configuration
+            ⚙️ Configuration
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 xl:gap-6">
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Model Selection */}
             <div className="flex flex-col">
-              <label htmlFor="modelSelect" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
+              <label
+                htmlFor="modelSelect"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+              >
                 Model Selection
               </label>
               <select
@@ -760,8 +824,8 @@ export default function Dashboard() {
                   setInvoicePage(1);
                   setCustomerPage(1);
                 }}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
-                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
+                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 aria-label="Select Model"
               >
                 {models.map((m) => (
@@ -772,9 +836,12 @@ export default function Dashboard() {
               </select>
             </div>
 
-            {/* Time range */}
+            {/* Time Range */}
             <div className="flex flex-col">
-              <label htmlFor="timeRange" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
+              <label
+                htmlFor="timeRange"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+              >
                 Time Range
               </label>
               <select
@@ -785,8 +852,8 @@ export default function Dashboard() {
                   setInvoicePage(1);
                   setCustomerPage(1);
                 }}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
-                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
+                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 aria-label="Select Time Range"
               >
                 {timeRanges.map((tr) => (
@@ -797,45 +864,54 @@ export default function Dashboard() {
               </select>
             </div>
 
-            {/* Custom Range: Start Date */}
+            {/* Custom Range */}
             {selectedTimeRange === "custom" && (
-              <div className="flex flex-col">
-                <label htmlFor="startDate" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
-                  Dari Tanggal
-                </label>
-                <input
-                  id="startDate"
-                  type="date"
-                  value={startDate}
-                  min={minDate}
-                  max={endDate || maxDate}
-                  onChange={(e) => setStartDate(e.target.value)}
-                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
+              <>
+                <div className="flex flex-col">
+                  <label
+                    htmlFor="startDate"
+                    className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+                  >
+                    Dari Tanggal
+                  </label>
+                  <input
+                    id="startDate"
+                    type="date"
+                    value={startDate}
+                    min={minDate}
+                    max={endDate || maxDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
+                               text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+                <div className="flex flex-col">
+                  <label
+                    htmlFor="endDate"
+                    className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+                  >
+                    Sampai Tanggal
+                  </label>
+                  <input
+                    id="endDate"
+                    type="date"
+                    value={endDate}
+                    min={startDate || minDate}
+                    max={maxDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
+                               text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
+              </>
             )}
 
-            {/* Custom Range: End Date */}
-            {selectedTimeRange === "custom" && (
-              <div className="flex flex-col">
-                <label htmlFor="endDate" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
-                  Sampai Tanggal
-                </label>
-                <input
-                  id="endDate"
-                  type="date"
-                  value={endDate}
-                  min={startDate || minDate}
-                  max={maxDate}
-                  onChange={(e) => setEndDate(e.target.value)}
-                  className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                />
-              </div>
-            )}
-
-            {/* Snapshot date */}
+            {/* Snapshot Date */}
             <div className="flex flex-col">
-              <label htmlFor="snapshotDate" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
+              <label
+                htmlFor="snapshotDate"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+              >
                 Snapshot Date
               </label>
               <input
@@ -849,16 +925,22 @@ export default function Dashboard() {
                   setInvoicePage(1);
                   setCustomerPage(1);
                 }}
-                className="w-full bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
-                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 transition-colors"
+                className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm
+                           text-gray-800 dark:text-gray-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all"
                 aria-label="Select Snapshot Date"
               />
             </div>
 
             {/* Threshold */}
             <div className="flex flex-col sm:col-span-2 lg:col-span-1">
-              <label htmlFor="riskThreshold" className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5">
-                Alert Threshold: <span className="font-semibold text-blue-600 dark:text-blue-400">{threshold.toFixed(2)}</span>
+              <label
+                htmlFor="riskThreshold"
+                className="block text-xs font-medium text-gray-600 dark:text-gray-400 mb-1.5"
+              >
+                Alert Threshold:{" "}
+                <span className="font-bold text-blue-600 dark:text-blue-400">
+                  {threshold.toFixed(2)}
+                </span>
               </label>
               <input
                 id="riskThreshold"
@@ -868,111 +950,129 @@ export default function Dashboard() {
                 step="0.05"
                 value={threshold}
                 onChange={(e) => setThreshold(Number(e.target.value))}
-                className="w-full accent-blue-500 mt-1 cursor-grab active:cursor-grabbing"
+                className="w-full accent-blue-500 mt-2 cursor-grab active:cursor-grabbing"
                 aria-label="Set Risk Alert Threshold"
               />
             </div>
           </div>
 
-          {/* Action buttons */}
-          <div className="mt-6 flex flex-wrap gap-3">
+          {/* Action Buttons */}
+          <div className="mt-5 flex flex-wrap gap-2 sm:gap-3">
             <button
+              id="btn-refresh-scoring"
               onClick={() => {
                 setActiveEndpoint("score");
                 setInvoicePage(1);
                 triggerCompute();
               }}
               disabled={loading}
-              className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500
-                         text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-blue-600/20 hover:shadow-blue-600/40
-                         focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 disabled:opacity-50 disabled:cursor-not-allowed
+                         text-white text-sm font-semibold rounded-lg transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               {loading && activeEndpoint === "score" ? (
-                <span className="flex items-center gap-2">
-                  <span className="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
-                  Processing...
-                </span>
+                <span className="animate-spin w-4 h-4 border-2 border-white/30 border-t-white rounded-full" />
               ) : (
-                "🔍 Refresh Scoring"
+                "🔍"
               )}
+              <span>Refresh Scoring</span>
             </button>
 
             <button
+              id="btn-alerts"
               onClick={() => {
                 setActiveEndpoint("alerts");
                 setInvoicePage(1);
                 runScoring("alerts");
               }}
               disabled={loading}
-              className="px-5 py-2.5 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500
-                         text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-amber-600/20 hover:shadow-amber-600/40
-                         focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed
+                         text-white text-sm font-semibold rounded-lg transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2"
             >
-              ⚠️ Alerts Only
+              ⚠️ <span>Alerts Only</span>
             </button>
 
             <button
+              id="btn-early-warning"
               onClick={() => {
                 setActiveEndpoint("receipt_trigger");
                 setInvoicePage(1);
                 runScoring("receipt_trigger");
               }}
               disabled={loading}
-              className="px-5 py-2.5 bg-red-600 hover:bg-red-500 disabled:bg-gray-700 disabled:text-gray-500
-                         text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-red-600/20 hover:shadow-red-600/40
-                         focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-red-600 hover:bg-red-700 active:bg-red-800 disabled:opacity-50 disabled:cursor-not-allowed
+                         text-white text-sm font-semibold rounded-lg transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
             >
-              🚨 Early Warning
+              🚨 <span>Early Warning</span>
             </button>
 
             <button
+              id="btn-download-csv"
               onClick={downloadCsv}
               disabled={loading}
-              className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500
-                         text-white text-sm font-semibold rounded-lg transition-all shadow-lg shadow-emerald-600/20 hover:shadow-emerald-600/40
-                         focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 dark:focus:ring-offset-gray-900 active:scale-95"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed
+                         text-white text-sm font-semibold rounded-lg transition-all shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2"
             >
-              📥 Download CSV
+              📥 <span>Download CSV</span>
             </button>
           </div>
         </section>
 
-        {/* ── Error ─── */}
+        {/* ── Notifications ─── */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 text-red-500 dark:text-red-400 text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
-            <span className="text-xl">🛑</span>
+          <div
+            id="alert-error"
+            className="bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-xl p-4 text-red-700 dark:text-red-400 text-sm flex items-start gap-3 fade-in animate-in"
+          >
+            <span className="text-xl shrink-0">🛑</span>
             <div>
-                <strong className="block mb-1">Error Processing Request</strong> 
-                {error}
+              <strong className="block mb-1 font-semibold">
+                Error Processing Request
+              </strong>
+              {error}
             </div>
           </div>
         )}
 
-        {/* ── Notice ─── */}
         {notice && !error && (
-          <div className="bg-blue-500/10 border border-blue-500/30 rounded-xl p-4 text-blue-700 dark:text-blue-300 text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
-            <span className="text-xl">ℹ️</span>
+          <div
+            id="alert-notice"
+            className="bg-blue-50 dark:bg-blue-500/10 border border-blue-300 dark:border-blue-500/30 rounded-xl p-4 text-blue-700 dark:text-blue-300 text-sm flex items-start gap-3 fade-in animate-in"
+          >
+            <span className="text-xl shrink-0">ℹ️</span>
             <div>{notice}</div>
           </div>
         )}
 
-        {/* ── Warning ─── */}
         {result?.warning && (
-          <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-4 text-amber-600 dark:text-amber-400 text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-2">
-            <span className="text-xl">⚠️</span>
+          <div
+            id="alert-warning"
+            className="bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 rounded-xl p-4 text-amber-700 dark:text-amber-400 text-sm flex items-start gap-3 fade-in animate-in"
+          >
+            <span className="text-xl shrink-0">⚠️</span>
+            <div>{result.warning}</div>
+          </div>
+        )}
+
+        {/* ── Compute Running Banner ─── */}
+        {computeStatus?.status === "running" && (
+          <div className="bg-violet-50 dark:bg-violet-900/20 border border-violet-200 dark:border-violet-700/40 rounded-xl p-4 flex items-center gap-3 text-sm text-violet-800 dark:text-violet-300">
+            <span className="animate-spin w-4 h-4 border-2 border-violet-400 border-t-violet-700 dark:border-t-violet-300 rounded-full shrink-0" />
             <div>
-                {result.warning}
+              <strong className="font-semibold">Compute berjalan di background</strong>
+              {computeMessage && (
+                <span className="ml-2 opacity-80">— {computeMessage}</span>
+              )}
             </div>
           </div>
         )}
 
         {/* ── Loading ─── */}
         {loading && (
-          <div className="flex items-center justify-center py-20 animate-in fade-in duration-500">
+          <div className="flex items-center justify-center py-16 fade-in animate-in">
             <div className="text-center space-y-4">
-              <div className="animate-spin w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full mx-auto" />
-              <p className="text-gray-600 dark:text-gray-400 text-sm font-medium animate-pulse">
-                Loading pre-computed results...
+              <div className="animate-spin w-12 h-12 border-4 border-blue-200 border-t-blue-600 rounded-full mx-auto" />
+              <p className="text-gray-500 dark:text-gray-400 text-sm font-medium">
+                Loading data...
               </p>
             </div>
           </div>
@@ -980,90 +1080,75 @@ export default function Dashboard() {
 
         {/* ── Results ─── */}
         {result && !loading && (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
-            {/* Mode info */}
+          <div className="space-y-6 animate-in slide-in-from-bottom-4">
+            {/* Meta Info Banner */}
             {result.analysis_type && (
-              <div className="bg-blue-500/5 border border-blue-500/20 rounded-xl p-4 transition-colors">
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-lg">🔶</span>
-                  <h3 className="font-semibold text-blue-700 dark:text-blue-300">
-                    {result.analysis_type}
-                  </h3>
-                </div>
-                {result.analysis_description && (
-                  <p className="text-sm text-gray-700 dark:text-gray-400">
-                    {result.analysis_description}
-                  </p>
-                )}
-                <div className="mt-3 flex flex-wrap gap-4 text-xs text-gray-600 dark:text-gray-400">
-                  {result.model_name && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Model:
-                      </strong>{" "}
-                      {result.model_name}
+              <div className="bg-blue-50 dark:bg-blue-500/5 border border-blue-200 dark:border-blue-500/20 rounded-xl p-4">
+                <div className="flex flex-wrap items-start gap-x-6 gap-y-2">
+                  <div>
+                    <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                      Mode
                     </span>
-                  )}
+                    <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                      {result.analysis_type}
+                    </p>
+                  </div>
                   {result.model_label && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Model:
-                      </strong>{" "}
-                      {result.model_label}
-                    </span>
+                    <div>
+                      <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        Model
+                      </span>
+                      <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                        {result.model_label}
+                      </p>
+                    </div>
                   )}
-                  <span>
-                    <strong className="text-gray-800 dark:text-gray-300">
-                      Source:
-                    </strong>{" "}
-                    MySQL ({"hasil_baddebt"})
-                  </span>
                   {result.effective_snapshot_date && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Effective Snapshot:
-                      </strong>{" "}
-                      {result.effective_snapshot_date}
-                    </span>
-                  )}
-                  {result.feature_count && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Features:
-                      </strong>{" "}
-                      {result.feature_count}
-                    </span>
+                    <div>
+                      <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        Snapshot
+                      </span>
+                      <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                        {result.effective_snapshot_date}
+                      </p>
+                    </div>
                   )}
                   {result.last_computed_at && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Last Compute:
-                      </strong>{" "}
-                      {result.last_computed_at}
-                    </span>
+                    <div>
+                      <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        Last Compute
+                      </span>
+                      <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                        {result.last_computed_at}
+                      </p>
+                    </div>
                   )}
-                  {result.job_id && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Job ID:
-                      </strong>{" "}
-                      {result.job_id}
-                    </span>
+                  {result.feature_count && (
+                    <div>
+                      <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        Features
+                      </span>
+                      <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                        {result.feature_count}
+                      </p>
+                    </div>
                   )}
                   {result.pagination && (
-                    <span>
-                      <strong className="text-gray-800 dark:text-gray-300">
-                        Page:
-                      </strong>{" "}
-                      {result.pagination.page}/{result.pagination.total_pages} ({result.pagination.total_records} records)
-                    </span>
+                    <div>
+                      <span className="text-xs font-medium text-blue-600 dark:text-blue-400 uppercase tracking-wider">
+                        Records
+                      </span>
+                      <p className="font-semibold text-blue-800 dark:text-blue-200 text-sm">
+                        {result.pagination.total_records.toLocaleString()}
+                      </p>
+                    </div>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Summary cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 xl:gap-4">
+            {/* Summary Stat Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               <StatCard
                 icon="📊"
                 label="Mode"
@@ -1078,7 +1163,11 @@ export default function Dashboard() {
               <StatCard
                 icon="📅"
                 label="Snapshot"
-                value={result.effective_snapshot_date || result.snapshot_date || "—"}
+                value={
+                  result.effective_snapshot_date ||
+                  result.snapshot_date ||
+                  "—"
+                }
               />
               <StatCard
                 icon="📄"
@@ -1105,177 +1194,263 @@ export default function Dashboard() {
               )}
             </div>
 
-            {/* Risk bar */}
-            {displayedRiskSummary && <RiskBar summary={displayedRiskSummary} />}
-
-            {/* Top EFL table */}
-            {topEflRows.length > 0 && (
-              <div className="mb-6">
-                <DataTable
-                  rows={topEflRows}
-                  title="Top Expected Financial Loss"
-                  subtitle="Invoice dengan potensi kerugian finansial tertinggi"
-                  priorityCols={[
-                    "CUSTOMER_NAME",
-                    "ACCOUNT_NUMBER",
-                    "CUSTOMER_TRX_ID",
-                    "TRX_DATE",
-                    "days_to_due",
-                    "expected_financial_loss",
-                    "prob_bad_debt",
-                    "TRX_AMOUNT",
-                    "risk_level",
-                    "recommended_action",
-                  ]}
-                />
-              </div>
+            {/* Risk Bar */}
+            {displayedRiskSummary && (
+              <RiskBar summary={displayedRiskSummary} />
             )}
 
-            {/* Invoice table */}
-            {invoiceRows.length === 0 && (
-              <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/50 dark:bg-gray-900/40 p-6 text-sm text-gray-600 dark:text-gray-400 text-center">
-                Tidak ada invoice yang cocok dengan filter saat ini.
-              </div>
-            )}
+            {/* ── Charts Section ─── */}
+            {hasCharts && (
+              <div className="space-y-4">
+                <h2 className="text-base font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
+                  📈 <span>Data Visualisasi</span>
+                </h2>
 
-            {invoiceRows.length > 0 && (
-              <DataTable
-                rows={invoiceRows}
-                title="Invoice Scores"
-                subtitle="Hasil prediksi per invoice"
-                isServerMode={activeEndpoint === "score"}
-                serverPagination={invoicePagination}
-                serverSearch={invoiceSearch}
-                onSearchChange={(value) => {
-                  setInvoiceSearch(value);
-                  setInvoicePage(1);
-                }}
-                serverSort={{ key: invoiceSortBy, direction: invoiceSortOrder }}
-                onSortChange={(key, direction) => {
-                  if (!direction) {
-                    setInvoiceSortBy("prob_bad_debt");
-                    setInvoiceSortOrder("desc");
-                  } else {
-                    setInvoiceSortBy(key);
-                    setInvoiceSortOrder(direction);
-                  }
-                }}
-                onPageChange={(page) => setInvoicePage(page)}
-                priorityCols={[
-                  "CUSTOMER_NAME",
-                  "ACCOUNT_NUMBER",
-                  "CUSTOMER_TRX_ID",
-                  "TRX_DATE",
-                  "days_to_due",
-                  "TRX_AMOUNT",
-                  "prob_bad_debt",
-                  "risk_level",
-                  "recommended_action",
-                ]}
-              />
-            )}
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {/* Invoice Risk Donut */}
+                  {displayedRiskSummary &&
+                    Object.keys(displayedRiskSummary).length > 0 && (
+                      <RiskDonut
+                        summary={displayedRiskSummary}
+                        title="Invoice Risk Distribution"
+                        subtitle="Distribusi risiko per invoice"
+                      />
+                    )}
 
-            {/* Customer risk section */}
-            {displayedCustomerRows.length > 0 && (
-              <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-800">
-                <div className="flex items-center gap-3">
-                  <h2 className="text-lg font-bold text-gray-900 dark:text-white">👥 Customer Risk</h2>
-                  <span className="text-xs text-gray-500 bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded-full">
-                    Aggregated from invoice-level predictions
-                  </span>
+                  {/* Customer Risk Donut */}
+                  {displayedCustomerRiskSummary &&
+                    Object.keys(displayedCustomerRiskSummary).length > 0 && (
+                      <RiskDonut
+                        summary={displayedCustomerRiskSummary}
+                        title="Customer Risk Distribution"
+                        subtitle="Distribusi risiko per customer"
+                      />
+                    )}
+
+                  {/* Score Distribution */}
+                  {invoiceRows.length > 0 && (
+                    <ScoreDistribution rows={invoiceRows} />
+                  )}
+
+                  {/* EFL Bar Chart - spans full width when alone */}
+                  {topEflRows.length > 0 && (
+                    <div className="md:col-span-2 xl:col-span-3">
+                      <EflBarChart rows={topEflRows} topN={10} />
+                    </div>
+                  )}
                 </div>
-
-                {/* Customer risk summary */}
-                {displayedCustomerRiskSummary && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 xl:gap-4">
-                    <StatCard
-                      icon="👥"
-                      label="Total Customers"
-                      value={
-                        activeEndpoint === "score"
-                          ? customerPagination.total_records || customerRows.length
-                          : displayedCustomerRows.length
-                      }
-                    />
-                    {displayedCustomerRiskSummary.HIGH != null && (
-                      <StatCard
-                        icon="🔴"
-                        label="High Risk"
-                        value={displayedCustomerRiskSummary.HIGH}
-                        variant="danger"
-                      />
-                    )}
-                    {displayedCustomerRiskSummary.MEDIUM != null && (
-                      <StatCard
-                        icon="🟠"
-                        label="Medium Risk"
-                        value={displayedCustomerRiskSummary.MEDIUM}
-                        variant="warning"
-                      />
-                    )}
-                    {displayedCustomerRiskSummary.LOW != null && (
-                      <StatCard
-                        icon="🟢"
-                        label="Low Risk"
-                        value={displayedCustomerRiskSummary.LOW}
-                        variant="success"
-                      />
-                    )}
-                  </div>
-                )}
-
-                {/* Customer risk table */}
-                <DataTable
-                  rows={displayedCustomerRows}
-                  title="Customer Risk List"
-                  subtitle="List customer berisiko berdasarkan agregasi invoice-level predictions"
-                  isServerMode={activeEndpoint === "score"}
-                  serverPagination={customerPagination}
-                  serverSearch={customerSearch}
-                  onSearchChange={(value) => {
-                    setCustomerSearch(value);
-                    setCustomerPage(1);
-                  }}
-                  serverSort={{ key: customerSortBy, direction: customerSortOrder }}
-                  onSortChange={(key, direction) => {
-                    if (!direction) {
-                      setCustomerSortBy("cust_score_max");
-                      setCustomerSortOrder("desc");
-                    } else {
-                      setCustomerSortBy(key);
-                      setCustomerSortOrder(direction);
-                    }
-                  }}
-                  onPageChange={(page) => setCustomerPage(page)}
-                  priorityCols={[
-                    "CUSTOMER_NAME",
-                    "ACCOUNT_NUMBER",
-                    "PARTY_ID",
-                    "cust_score_max",
-                    "cust_score_mean",
-                    "cust_score_wavg_amount",
-                    "risk_cust",
-                    "invoice_cnt",
-                    "total_amount",
-                    "paid_ratio_pre_due_total",
-                    "pct_invoices_gap_gt_90_pre_due",
-                  ]}
-                />
               </div>
             )}
 
-            {/* Raw JSON collapsible */}
-            <details className="bg-white/40 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl group transition-all">
-              <summary className="px-4 py-3 cursor-pointer text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 font-medium select-none outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl">
-                <span className="inline-flex items-center gap-2">
-                    <span className="group-open:rotate-90 transition-transform duration-200">▶</span>
-                    📋 View Raw JSON Response
+            {/* ── Tables Section — Tabbed ─── */}
+            <div className="space-y-4">
+              {/* Tab Switcher */}
+              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit">
+                <button
+                  onClick={() => setActiveTab("invoice")}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                    activeTab === "invoice"
+                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                  }`}
+                >
+                  📄 Invoice Scores
+                  {invoiceRows.length > 0 && (
+                    <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full font-semibold">
+                      {invoicePagination.total_records > 0
+                        ? invoicePagination.total_records.toLocaleString()
+                        : invoiceRows.length}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={() => setActiveTab("customer")}
+                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                    activeTab === "customer"
+                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                  }`}
+                >
+                  👥 Customer Risk
+                  {displayedCustomerRows.length > 0 && (
+                    <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full font-semibold">
+                      {customerPagination.total_records > 0
+                        ? customerPagination.total_records.toLocaleString()
+                        : displayedCustomerRows.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {/* Invoice Tab */}
+              {activeTab === "invoice" && (
+                <div className="space-y-4">
+                  {/* Top EFL table */}
+                  {topEflRows.length > 0 && (
+                    <DataTable
+                      rows={topEflRows}
+                      title="Top Expected Financial Loss"
+                      subtitle="Invoice dengan potensi kerugian finansial tertinggi"
+                      priorityCols={[
+                        "CUSTOMER_NAME",
+                        "ACCOUNT_NUMBER",
+                        "CUSTOMER_TRX_ID",
+                        "TRX_DATE",
+                        "days_to_due",
+                        "expected_financial_loss",
+                        "prob_bad_debt",
+                        "TRX_AMOUNT",
+                        "risk_level",
+                        "recommended_action",
+                      ]}
+                    />
+                  )}
+
+                  {/* Invoice table */}
+                  {invoiceRows.length === 0 ? (
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
+                      Tidak ada invoice yang cocok dengan filter saat ini.
+                    </div>
+                  ) : (
+                    <DataTable
+                      rows={invoiceRows}
+                      title="Invoice Scores"
+                      subtitle="Hasil prediksi per invoice"
+                      isServerMode={activeEndpoint === "score"}
+                      serverPagination={invoicePagination}
+                      serverSearch={invoiceSearch}
+                      onSearchChange={(value) => {
+                        setInvoiceSearch(value);
+                        setInvoicePage(1);
+                      }}
+                      serverSort={{ key: invoiceSortBy, direction: invoiceSortOrder }}
+                      onSortChange={(key, direction) => {
+                        if (!direction) {
+                          setInvoiceSortBy("prob_bad_debt");
+                          setInvoiceSortOrder("desc");
+                        } else {
+                          setInvoiceSortBy(key);
+                          setInvoiceSortOrder(direction);
+                        }
+                      }}
+                      onPageChange={(page) => setInvoicePage(page)}
+                      priorityCols={[
+                        "CUSTOMER_NAME",
+                        "ACCOUNT_NUMBER",
+                        "CUSTOMER_TRX_ID",
+                        "TRX_DATE",
+                        "days_to_due",
+                        "TRX_AMOUNT",
+                        "prob_bad_debt",
+                        "risk_level",
+                        "recommended_action",
+                      ]}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* Customer Tab */}
+              {activeTab === "customer" && (
+                <div className="space-y-4">
+                  {/* Customer Summary Cards */}
+                  {displayedCustomerRiskSummary && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <StatCard
+                        icon="👥"
+                        label="Total Customers"
+                        value={
+                          activeEndpoint === "score"
+                            ? customerPagination.total_records ||
+                              customerRows.length
+                            : displayedCustomerRows.length
+                        }
+                      />
+                      {displayedCustomerRiskSummary.HIGH != null && (
+                        <StatCard
+                          icon="🔴"
+                          label="High Risk"
+                          value={displayedCustomerRiskSummary.HIGH}
+                          variant="danger"
+                        />
+                      )}
+                      {displayedCustomerRiskSummary.MEDIUM != null && (
+                        <StatCard
+                          icon="🟠"
+                          label="Medium Risk"
+                          value={displayedCustomerRiskSummary.MEDIUM}
+                          variant="warning"
+                        />
+                      )}
+                      {displayedCustomerRiskSummary.LOW != null && (
+                        <StatCard
+                          icon="🟢"
+                          label="Low Risk"
+                          value={displayedCustomerRiskSummary.LOW}
+                          variant="success"
+                        />
+                      )}
+                    </div>
+                  )}
+
+                  {displayedCustomerRows.length === 0 ? (
+                    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
+                      Data customer risk belum tersedia.
+                    </div>
+                  ) : (
+                    <DataTable
+                      rows={displayedCustomerRows}
+                      title="Customer Risk List"
+                      subtitle="Agregasi prediksi risiko per customer"
+                      isServerMode={activeEndpoint === "score"}
+                      serverPagination={customerPagination}
+                      serverSearch={customerSearch}
+                      onSearchChange={(value) => {
+                        setCustomerSearch(value);
+                        setCustomerPage(1);
+                      }}
+                      serverSort={{ key: customerSortBy, direction: customerSortOrder }}
+                      onSortChange={(key, direction) => {
+                        if (!direction) {
+                          setCustomerSortBy("cust_score_max");
+                          setCustomerSortOrder("desc");
+                        } else {
+                          setCustomerSortBy(key);
+                          setCustomerSortOrder(direction);
+                        }
+                      }}
+                      onPageChange={(page) => setCustomerPage(page)}
+                      priorityCols={[
+                        "CUSTOMER_NAME",
+                        "ACCOUNT_NUMBER",
+                        "PARTY_ID",
+                        "cust_score_max",
+                        "cust_score_mean",
+                        "cust_score_wavg_amount",
+                        "risk_cust",
+                        "invoice_cnt",
+                        "total_amount",
+                        "paid_ratio_pre_due_total",
+                        "pct_invoices_gap_gt_90_pre_due",
+                      ]}
+                    />
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Raw JSON Collapsible */}
+            <details className="bg-white dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl group">
+              <summary className="px-4 py-3 cursor-pointer text-sm text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 font-medium select-none outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-xl list-none flex items-center gap-2">
+                <span className="group-open:rotate-90 transition-transform duration-200 text-xs">
+                  ▶
                 </span>
+                📋 View Raw JSON Response
               </summary>
               <div className="p-4 pt-0 border-t border-gray-200 dark:border-gray-800 mt-2">
-                  <pre className="p-4 bg-gray-50 dark:bg-gray-950 rounded-lg text-xs text-gray-700 dark:text-gray-400 overflow-x-auto max-h-96 scrollbar-thin">
-                    {JSON.stringify(result, null, 2)}
-                  </pre>
+                <pre className="p-4 bg-gray-50 dark:bg-gray-950 rounded-lg text-xs text-gray-700 dark:text-gray-400 overflow-x-auto max-h-96 scrollbar-thin">
+                  {JSON.stringify(result, null, 2)}
+                </pre>
               </div>
             </details>
           </div>
@@ -1283,82 +1458,114 @@ export default function Dashboard() {
 
         {/* ── Empty State ─── */}
         {!result && !loading && !error && (
-          <div className="flex flex-col items-center justify-center py-20 text-center animate-in fade-in zoom-in-95 duration-500">
-            <div className="text-6xl mb-6 bg-blue-50 dark:bg-blue-900/20 w-24 h-24 rounded-full flex items-center justify-center">📊</div>
-            <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">
+          <div className="flex flex-col items-center justify-center py-20 text-center fade-in animate-in">
+            <div className="text-5xl mb-5 bg-blue-100 dark:bg-blue-900/20 w-20 h-20 rounded-2xl flex items-center justify-center">
+              📊
+            </div>
+            <h3 className="text-lg font-bold text-gray-800 dark:text-gray-100">
               Ready to Analyze
             </h3>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-md leading-relaxed">
-              Sistem akan mencoba memuat hasil filter secara otomatis. Jika data belum tersedia, compute akan dijalankan di background dan progresnya dapat dilihat pada panel Terminal Proses Backend.
+            <p className="text-sm text-gray-500 dark:text-gray-400 mt-2 max-w-sm leading-relaxed">
+              Sistem akan mencoba memuat hasil secara otomatis. Jika data belum
+              tersedia, compute akan dijalankan di background.
             </p>
           </div>
         )}
       </div>
 
       {/* ── Footer ─── */}
-      <footer className="border-t border-gray-200 dark:border-gray-800 mt-12 py-8 bg-white/50 dark:bg-gray-900/50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-gray-500">
-          <div>
-            Bad Debt Early-Warning System · Kalla Group
-          </div>
-          <div>
-            &copy; {new Date().getFullYear()} All rights reserved.
-          </div>
+      <footer className="border-t border-gray-200 dark:border-gray-800 mt-12 py-6 bg-white/80 dark:bg-gray-900/50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-gray-400 dark:text-gray-500">
+          <span>Bad Debt Early-Warning System · Kalla Group</span>
+          <span>© {new Date().getFullYear()} All rights reserved.</span>
         </div>
       </footer>
 
       {/* ── Fixed Process Terminal ─── */}
       <div className="fixed bottom-0 inset-x-0 z-50 pointer-events-none">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 pb-3 pointer-events-auto">
-          <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white/95 dark:bg-gray-900/95 shadow-2xl backdrop-blur overflow-hidden">
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 pb-3 pointer-events-auto">
+          <div className="rounded-xl border border-gray-200 dark:border-gray-700 bg-white/98 dark:bg-gray-900/98 shadow-2xl backdrop-blur overflow-hidden">
+            {/* Terminal Header */}
             <button
+              id="terminal-toggle"
               onClick={() => setTerminalOpen((v) => !v)}
-              className="w-full flex items-center justify-between px-4 py-3 text-left text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-100/70 dark:hover:bg-gray-800/70 transition-colors"
+              className="w-full flex items-center justify-between px-4 py-2.5 text-left text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800/70 transition-colors"
             >
-              <span>Terminal Proses Backend</span>
-              <span className="text-xs text-gray-500">{terminalOpen ? "Hide" : "Show"}</span>
+              <span className="flex items-center gap-2">
+                <span className="font-mono text-xs bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded text-gray-600 dark:text-gray-400">
+                  $
+                </span>
+                Terminal Proses Backend
+                {processLogs.length > 0 && (
+                  <span className="text-xs text-gray-400 dark:text-gray-500">
+                    ({processLogs.length} logs)
+                  </span>
+                )}
+              </span>
+              <div className="flex items-center gap-2">
+                {computeStatus?.status === "running" && (
+                  <span className="w-2 h-2 rounded-full bg-violet-500 animate-pulse" />
+                )}
+                <span className="text-xs text-gray-500">
+                  {terminalOpen ? "▼ Hide" : "▲ Show"}
+                </span>
+              </div>
             </button>
 
             {terminalOpen && (
-              <div className="border-t border-gray-200 dark:border-gray-800 p-3 space-y-3">
+              <div className="border-t border-gray-200 dark:border-gray-700 p-3 space-y-2">
+                {/* Job Status + Clear */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-gray-500">
-                  <span>
+                  <span className="font-mono">
                     {computeStatus?.job_id
-                      ? `Job: ${computeStatus.job_id} • Status: ${computeStatus.status}`
-                      : "Belum ada job compute aktif"}
+                      ? `Job: ${computeStatus.job_id} · Status: ${computeStatus.status}`
+                      : "No active compute job"}
                   </span>
                   <button
                     onClick={() => setProcessLogs([])}
-                    className="self-start sm:self-auto px-3 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300"
+                    className="self-start sm:self-auto px-3 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-300 transition-colors text-xs"
                   >
                     Clear Logs
                   </button>
                 </div>
-                <div className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-950 text-gray-100 p-3 h-44 sm:h-56 overflow-y-auto font-mono text-xs">
+
+                {/* Log Area */}
+                <div
+                  ref={terminalBodyRef}
+                  className="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-950 text-gray-100 p-3 h-40 sm:h-52 overflow-y-auto font-mono text-xs scrollbar-thin"
+                >
                   {processLogs.length === 0 ? (
-                    <div className="text-gray-400">[info] Menunggu aktivitas backend...</div>
+                    <div className="text-gray-500">
+                      [info] Menunggu aktivitas backend...
+                    </div>
                   ) : (
                     processLogs.map((log, idx) => (
-                      <div key={`${log.ts}-${idx}`} className="whitespace-pre-wrap break-words">
-                        <span className="text-gray-400">[{log.ts}]</span>{" "}
+                      <div
+                        key={`${log.ts}-${idx}`}
+                        className="whitespace-pre-wrap break-words leading-5"
+                      >
+                        <span className="text-gray-500">[{log.ts}]</span>{" "}
                         <span
                           className={
                             log.level === "error"
-                              ? "text-rose-300"
+                              ? "text-rose-400"
                               : log.level === "warn"
-                                ? "text-amber-300"
-                                : "text-emerald-300"
+                                ? "text-amber-400"
+                                : "text-emerald-400"
                           }
                         >
                           [{log.level}]
                         </span>{" "}
-                        <span>{log.message}</span>
+                        <span className="text-gray-200">{log.message}</span>
                       </div>
                     ))
                   )}
                 </div>
+
                 {computeMessage && (
-                  <p className="text-xs text-violet-700 dark:text-violet-300">{computeMessage}</p>
+                  <p className="text-xs text-violet-600 dark:text-violet-300 font-medium">
+                    › {computeMessage}
+                  </p>
                 )}
               </div>
             )}

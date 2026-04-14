@@ -36,6 +36,7 @@ export interface ScoringResult {
   model_label?: string;
   feature_count?: number;
   snapshot_date?: string;
+  effective_snapshot_date?: string;
   time_range?: string;
   total_invoices?: number;
   processed_invoices?: number;

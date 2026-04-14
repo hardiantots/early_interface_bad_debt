@@ -14,7 +14,14 @@ import {
 } from "@/types";
 
 // ── Config ─────────────────────────────────────────────────────────────
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+const normalizeApiBase = (value?: string): string => {
+  const raw = String(value || "").trim();
+  if (!raw) return "http://localhost:8000";
+  const withProtocol = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
+  return withProtocol.replace(/\/+$/, "");
+};
+
+const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE);
 
 const getTodayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -147,6 +154,7 @@ export default function Dashboard() {
   // AbortController ref to handle race conditions
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const scoreRetryTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastPolledStatusRef = useRef<string | null>(null);
 
   const appendLog = useCallback(
@@ -238,16 +246,45 @@ export default function Dashboard() {
         params.set("start_date", startDate);
         params.set("end_date", endDate);
       }
+      
       if (search.trim()) {
         params.set("search", search.trim());
       }
 
       const resp = await fetch(`${API_BASE}/db/customer_risk?${params}`);
-      const data = (await resp.json()) as ScoringResult;
+      const data = (await resp.json()) as
+        | ScoringResult
+        | (ComputeTriggerResponse & { error?: string; detail?: string });
+
+      if (resp.status === 202 && "status" in data && data.status === "running") {
+        setCustomerRows([]);
+        setCustomerRiskSummary(null);
+        setCustomerPagination(defaultPagination);
+        setComputeStatus((prev) => {
+          if (data.job_id) {
+            return { job_id: data.job_id, status: "running" };
+          }
+          return prev?.job_id ? { job_id: prev.job_id, status: "running" } : prev;
+        });
+        setComputeMessage(
+          data.message || "Customer risk sedang dipersiapkan di background.",
+        );
+        appendLog(
+          "warn",
+          data.message || "Customer risk belum tersedia, compute sedang berjalan.",
+        );
+        return;
+      }
+
       if (!resp.ok || data.error) {
         setCustomerRows([]);
         setCustomerRiskSummary(null);
         setCustomerPagination(defaultPagination);
+        const detail =
+          "detail" in data && data.detail
+            ? data.detail
+            : "Customer risk belum tersedia pada sumber lokal.";
+        appendLog("warn", detail);
         return;
       }
 
@@ -266,13 +303,57 @@ export default function Dashboard() {
       customerSearch,
       customerSortBy,
       customerSortOrder,
+      appendLog,
     ],
   );
+
+  
+  
+  const triggerCompute = useCallback(async () => {
+    setLoading(true);
+    setNotice("Memicu perhitungan data terbaru...");
+    setError(null);
+    appendLog("info", `Manual trigger compute started.`);
+    
+    try {
+      const params = new URLSearchParams({
+        model: selectedModel,
+        time_range: selectedTimeRange,
+      });
+      if (snapshotDate) params.set("snapshot_date", snapshotDate);
+      if (selectedTimeRange === "custom") {
+        params.set("start_date", startDate);
+        params.set("end_date", endDate);
+      }
+      
+      const resp = await fetch(`${API_BASE}/db/compute?${params}`, {
+        method: "POST",
+      });
+      const data = await resp.json();
+      
+      if (resp.status === 202 || resp.ok) {
+        setComputeStatus({ job_id: data.job_id, status: "running" });
+        setComputeMessage(data.message || "Compute berjalan di background...");
+        appendLog("info", "Compute job didaftarkan: " + data.job_id);
+      } else {
+        setNotice("Compute task gagal didaftarkan.");
+        setLoading(false);
+      }
+    } catch (err: any) {
+      setError(err.message);
+      setLoading(false);
+    }
+  }, [selectedModel, selectedTimeRange, snapshotDate, startDate, endDate, appendLog]);
 
   const runScoring = useCallback(async (
     endpoint: "score" | "alerts" | "receipt_trigger" = "score",
     opts?: { timeRange?: string; thresh?: number; modelKey?: string },
   ) => {
+    if (scoreRetryTimerRef.current) {
+      clearTimeout(scoreRetryTimerRef.current);
+      scoreRetryTimerRef.current = null;
+    }
+
     // Cancel previous request if any
     if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -315,7 +396,7 @@ export default function Dashboard() {
     }
 
     // Auto-bootstrap compute if data doesn't exist for current filter/mode.
-    params.set("auto_compute_if_missing", "true");
+    
 
     appendLog("info", `Request ${endpoint} dimulai (range=${tr}, model=${mk})`);
 
@@ -326,11 +407,6 @@ export default function Dashboard() {
       const data = (await resp.json()) as ScoringResult & ComputeTriggerResponse;
 
       if (resp.status === 202 && data.status === "running") {
-        setResult(null);
-        setCustomerRows([]);
-        setCustomerRiskSummary(null);
-        setInvoicePagination(defaultPagination);
-        setCustomerPagination(defaultPagination);
         setNotice("Data belum tersedia. Sistem sedang menyiapkan hasil compute.");
         setComputeStatus((prev) => {
           if (data.job_id) {
@@ -342,6 +418,11 @@ export default function Dashboard() {
           data.message || "Compute sedang berjalan. Menunggu hasil pertama...",
         );
         appendLog("info", data.message || "Compute berjalan di background");
+
+        // Keep probing score endpoint because running job can be unrelated.
+        scoreRetryTimerRef.current = setTimeout(() => {
+          runScoring(endpoint, { timeRange: tr, modelKey: mk, thresh: th });
+        }, 4000);
         return;
       }
 
@@ -364,9 +445,23 @@ export default function Dashboard() {
         setError(data.error);
         appendLog("error", data.error);
       } else {
+        if (scoreRetryTimerRef.current) {
+          clearTimeout(scoreRetryTimerRef.current);
+          scoreRetryTimerRef.current = null;
+        }
         setResult(data);
         setInvoicePagination(data.pagination || defaultPagination);
         await fetchCustomerRisk({ timeRange: tr, modelKey: mk });
+        const effectiveSnapshot = data.effective_snapshot_date || data.snapshot_date;
+        if (effectiveSnapshot && effectiveSnapshot !== snapshotDate) {
+          setNotice(
+            `Data prediksi dibaca dari publish terbaru (snapshot efektif ${effectiveSnapshot}).`,
+          );
+          appendLog(
+            "warn",
+            `Snapshot efektif dari MySQL publish: ${effectiveSnapshot} (request: ${snapshotDate})`,
+          );
+        }
         const rowsLen =
           (data.preview?.length || 0) +
           (data.alerts?.length || 0) +
@@ -546,6 +641,9 @@ export default function Dashboard() {
           }
         if (pollTimerRef.current) {
           clearInterval(pollTimerRef.current);
+        }
+        if (scoreRetryTimerRef.current) {
+          clearTimeout(scoreRetryTimerRef.current);
         }
       };
   }, []);
@@ -782,7 +880,7 @@ export default function Dashboard() {
               onClick={() => {
                 setActiveEndpoint("score");
                 setInvoicePage(1);
-                runScoring("score");
+                triggerCompute();
               }}
               disabled={loading}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500
@@ -881,7 +979,7 @@ export default function Dashboard() {
         )}
 
         {/* ── Results ─── */}
-        {result && !result.warning && !loading && (
+        {result && !loading && (
           <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
             {/* Mode info */}
             {result.analysis_type && (
@@ -912,6 +1010,20 @@ export default function Dashboard() {
                         Model:
                       </strong>{" "}
                       {result.model_label}
+                    </span>
+                  )}
+                  <span>
+                    <strong className="text-gray-800 dark:text-gray-300">
+                      Source:
+                    </strong>{" "}
+                    MySQL ({"hasil_baddebt"})
+                  </span>
+                  {result.effective_snapshot_date && (
+                    <span>
+                      <strong className="text-gray-800 dark:text-gray-300">
+                        Effective Snapshot:
+                      </strong>{" "}
+                      {result.effective_snapshot_date}
                     </span>
                   )}
                   {result.feature_count && (
@@ -966,7 +1078,7 @@ export default function Dashboard() {
               <StatCard
                 icon="📅"
                 label="Snapshot"
-                value={result.snapshot_date || "—"}
+                value={result.effective_snapshot_date || result.snapshot_date || "—"}
               />
               <StatCard
                 icon="📄"
@@ -1056,9 +1168,6 @@ export default function Dashboard() {
                   "TRX_DATE",
                   "days_to_due",
                   "TRX_AMOUNT",
-                  "paid_ratio",
-                  "n_pay_pre_due",
-                  "party_prior_bd90_cnt",
                   "prob_bad_debt",
                   "risk_level",
                   "recommended_action",

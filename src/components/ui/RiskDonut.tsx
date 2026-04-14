@@ -115,16 +115,40 @@ export function RiskDonut({ summary, title, subtitle }: RiskDonutProps) {
             ))}
           </Pie>
           <Tooltip
-            formatter={(value) => {
-              const num = Number(value);
-              return [`${num} (${((num / total) * 100).toFixed(1)}%)`, ""];
-            }}
-            contentStyle={{
-              background: "rgba(255,255,255,0.95)",
-              border: "1px solid #e5e7eb",
-              borderRadius: "8px",
-              fontSize: "12px",
-              color: "#111",
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const data = payload[0].payload;
+              return (
+                <div
+                  style={{
+                    background: "rgba(255,255,255,0.97)",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: "8px",
+                    padding: "8px 12px",
+                    fontSize: "12px",
+                    color: "#111",
+                    boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
+                    minWidth: "140px",
+                  }}
+                >
+                  <div className="font-semibold text-gray-800 mb-1 flex items-center gap-2">
+                    <span 
+                      className="w-2.5 h-2.5 rounded-full" 
+                      style={{ background: data.color }} 
+                    />
+                    {data.name}
+                  </div>
+                  <div className="flex justify-between items-center gap-3">
+                    <span className="text-gray-500">Jumlah:</span>
+                    <span className="font-bold flex items-center gap-1">
+                      {data.value}
+                      <span className="text-xs text-gray-400 font-normal">
+                        ({((data.value / total) * 100).toFixed(1)}%)
+                      </span>
+                    </span>
+                  </div>
+                </div>
+              );
             }}
           />
           <Legend

@@ -42,11 +42,13 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
         padding: "8px 12px",
         fontSize: 12,
         color: "#111",
+        boxShadow: "0 4px 6px -1px rgba(0, 0, 0, 0.1)",
       }}
     >
-      <div className="font-semibold text-gray-700">{label}</div>
-      <div className="text-blue-600 mt-0.5 font-medium">
-        {payload[0]?.value} invoice
+      <div className="font-semibold text-gray-700 mb-1">Bucket Probabilitas: {label}</div>
+      <div className="text-blue-600 font-medium flex justify-between gap-3 items-center">
+        <span>Jumlah Invoice:</span>
+        <span className="text-sm">{payload[0]?.value}</span>
       </div>
     </div>
   );

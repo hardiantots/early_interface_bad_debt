@@ -7,6 +7,8 @@ import { RiskBar } from "@/components/ui/RiskBar";
 import { RiskDonut } from "@/components/ui/RiskDonut";
 import { EflBarChart } from "@/components/ui/EflBarChart";
 import { ScoreDistribution } from "@/components/ui/ScoreDistribution";
+import { RiskMatrixChart } from "@/components/ui/RiskMatrixChart";
+import { ActionBarChart } from "@/components/ui/ActionBarChart";
 import { DataTable } from "@/components/ui/DataTable";
 import {
   ComputeJobStatus,
@@ -109,7 +111,7 @@ export default function Dashboard() {
     { key: "1y", label: "1 tahun terakhir" },
     { key: "all", label: "Semua data (terlama s/d terbaru)" },
   ]);
-  const [selectedTimeRange, setSelectedTimeRange] = useState("1w");
+  const [selectedTimeRange, setSelectedTimeRange] = useState("3m");
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState("stacked");
   const [snapshotDate, setSnapshotDate] = useState(getTodayISO());
@@ -128,6 +130,7 @@ export default function Dashboard() {
   const [notice, setNotice] = useState<string | null>(null);
   const [result, setResult] = useState<ScoringResult | null>(null);
   const [customerRows, setCustomerRows] = useState<Record<string, unknown>[]>([]);
+  const [chartRows, setChartRows] = useState<Record<string, unknown>[]>([]);
   const [customerRiskSummary, setCustomerRiskSummary] = useState<Record<string, number> | null>(null);
   const [invoicePagination, setInvoicePagination] = useState<PaginationMeta>(defaultPagination);
   const [customerPagination, setCustomerPagination] = useState<PaginationMeta>(defaultPagination);
@@ -147,7 +150,7 @@ export default function Dashboard() {
   const [processLogs, setProcessLogs] = useState<ProcessLog[]>([]);
   const [activeEndpoint, setActiveEndpoint] = useState<EndpointMode>("score");
   const [initialLoaded, setInitialLoaded] = useState(false);
-  const [activeTab, setActiveTab] = useState<"invoice" | "customer">("invoice");
+  const [activeUISection, setActiveUISection] = useState<"visualisasi" | "hasil_prediksi" | "customer_risk">("visualisasi");
 
   // ── Refs ──────────────────────────────────────────────────────────────
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -317,6 +320,46 @@ export default function Dashboard() {
     ],
   );
 
+  // ── Fetch Chart Data ──────────────────────────────────────────────────
+  const fetchChartData = useCallback(
+    async (opts?: {
+      timeRange?: string;
+      modelKey?: string;
+    }) => {
+      const tr = opts?.timeRange ?? selectedTimeRange;
+      const mk = opts?.modelKey ?? selectedModel;
+
+      const params = new URLSearchParams({
+        model: mk,
+        snapshot_date: snapshotDate,
+        time_range: tr,
+      });
+      if (tr === "custom") {
+        params.set("start_date", startDate);
+        params.set("end_date", endDate);
+      }
+
+      try {
+        const resp = await fetch(`${API_BASE}/db/chart_data?${params}`);
+        if (!resp.ok) {
+          setChartRows([]);
+          return;
+        }
+        const data = await resp.json();
+        setChartRows(Array.isArray(data) ? data : data.chart_data || data.data || []);
+      } catch {
+        setChartRows([]);
+      }
+    },
+    [
+      selectedTimeRange,
+      selectedModel,
+      snapshotDate,
+      startDate,
+      endDate,
+    ],
+  );
+
   // ── Trigger Compute ───────────────────────────────────────────────────
   const triggerCompute = useCallback(async () => {
     setLoading(true);
@@ -438,6 +481,7 @@ export default function Dashboard() {
           if (resp.status === 404 && data.error?.includes("No pre-computed")) {
             setResult(null);
             setCustomerRows([]);
+            setChartRows([]);
             setCustomerRiskSummary(null);
             setInvoicePagination(defaultPagination);
             setCustomerPagination(defaultPagination);
@@ -462,7 +506,10 @@ export default function Dashboard() {
           }
           setResult(data);
           setInvoicePagination(data.pagination || defaultPagination);
-          await fetchCustomerRisk({ timeRange: tr, modelKey: mk });
+          await Promise.all([
+            fetchCustomerRisk({ timeRange: tr, modelKey: mk }),
+            fetchChartData({ timeRange: tr, modelKey: mk })
+          ]);
           const effectiveSnapshot =
             data.effective_snapshot_date || data.snapshot_date;
           if (effectiveSnapshot && effectiveSnapshot !== snapshotDate) {
@@ -517,6 +564,7 @@ export default function Dashboard() {
       invoiceSortBy,
       invoiceSortOrder,
       fetchCustomerRisk,
+      fetchChartData,
       appendLog,
     ],
   );
@@ -690,6 +738,13 @@ export default function Dashboard() {
     [result, activeEndpoint, threshold],
   );
 
+  const displayedChartRows = useMemo(() => {
+    if (activeEndpoint === "score") {
+      return chartRows;
+    }
+    return chartRows.filter((row) => isNonLowRiskRow(row, threshold));
+  }, [chartRows, activeEndpoint, threshold]);
+
   const displayedRiskSummary = useMemo(() => {
     if (activeEndpoint === "score") {
       return result?.risk_summary || null;
@@ -718,12 +773,13 @@ export default function Dashboard() {
   const hasCharts =
     (displayedRiskSummary && Object.keys(displayedRiskSummary).length > 0) ||
     topEflRows.length > 0 ||
-    invoiceRows.length > 0;
+    invoiceRows.length > 0 ||
+    displayedChartRows.length > 0;
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <main
-      className={`min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 ${terminalOpen ? "pb-80 sm:pb-96" : "pb-28"}`}
+      className={`flex flex-col min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 ${terminalOpen ? "pb-80 sm:pb-96" : "pb-28"}`}
     >
       {/* ── Header ─── */}
       <header className="fixed top-0 inset-x-0 z-40 bg-white/95 dark:bg-gray-900/95 border-b border-gray-200 dark:border-gray-800 backdrop-blur shadow-sm">
@@ -800,7 +856,7 @@ export default function Dashboard() {
         </div>
       </header>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-28 sm:pt-28 py-6 space-y-6">
+      <div className="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 pt-28 sm:pt-28 py-6 space-y-6 flex flex-col">
         {/* ── Control Panel ─── */}
         <section className="bg-white dark:bg-gray-900/60 backdrop-blur-sm rounded-xl border border-gray-200 dark:border-gray-800 p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-4">
@@ -1199,13 +1255,43 @@ export default function Dashboard() {
               <RiskBar summary={displayedRiskSummary} />
             )}
 
-            {/* ── Charts Section ─── */}
-            {hasCharts && (
-              <div className="space-y-4">
-                <h2 className="text-base font-bold text-gray-800 dark:text-gray-200 flex items-center gap-2">
-                  📈 <span>Data Visualisasi</span>
-                </h2>
+            {/* ── Navigation Tabs ─── */}
+            <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit mt-6 mb-2 overflow-x-auto">
+              <button
+                onClick={() => setActiveUISection("visualisasi")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${
+                  activeUISection === "visualisasi"
+                    ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
+                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                }`}
+              >
+                📈 Data Visualisasi
+              </button>
+              <button
+                onClick={() => setActiveUISection("hasil_prediksi")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${
+                  activeUISection === "hasil_prediksi"
+                    ? "bg-white dark:bg-gray-700 text-amber-600 dark:text-amber-400 shadow-sm"
+                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                }`}
+              >
+                📄 Hasil Prediksi & EFL
+              </button>
+              <button
+                onClick={() => setActiveUISection("customer_risk")}
+                className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all whitespace-nowrap ${
+                  activeUISection === "customer_risk"
+                    ? "bg-white dark:bg-gray-700 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
+                }`}
+              >
+                👥 Customer Risk
+              </button>
+            </div>
 
+            {/* ── SECTION 1: VISUALISASI ─── */}
+            {activeUISection === "visualisasi" && hasCharts && (
+              <section className="space-y-4 pt-4 fade-in animate-in">
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                   {/* Invoice Risk Donut */}
                   {displayedRiskSummary &&
@@ -1228,216 +1314,190 @@ export default function Dashboard() {
                     )}
 
                   {/* Score Distribution */}
-                  {invoiceRows.length > 0 && (
-                    <ScoreDistribution rows={invoiceRows} />
+                  {displayedChartRows.length > 0 && (
+                    <ScoreDistribution rows={displayedChartRows} />
+                  )}
+                  
+                  {/* Risk Matrix Chart (Scatter Flow) */}
+                  {displayedChartRows.length > 0 && (
+                    <div className="md:col-span-2 xl:col-span-3">
+                      <RiskMatrixChart rows={displayedChartRows} />
+                    </div>
                   )}
 
-                  {/* EFL Bar Chart - spans full width when alone */}
+                  {/* Top EFL Bar Chart */}
                   {topEflRows.length > 0 && (
                     <div className="md:col-span-2 xl:col-span-3">
                       <EflBarChart rows={topEflRows} topN={10} />
                     </div>
                   )}
+
+                  {/* Action Bar Chart */}
+                  {displayedChartRows.length > 0 && (
+                    <div className="md:col-span-2 xl:col-span-3">
+                      <ActionBarChart rows={displayedChartRows} />
+                    </div>
+                  )}
                 </div>
-              </div>
+              </section>
             )}
 
-            {/* ── Tables Section — Tabbed ─── */}
-            <div className="space-y-4">
-              {/* Tab Switcher */}
-              <div className="flex items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-xl w-fit">
-                <button
-                  onClick={() => setActiveTab("invoice")}
-                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                    activeTab === "invoice"
-                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-                  }`}
-                >
-                  📄 Invoice Scores
-                  {invoiceRows.length > 0 && (
-                    <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full font-semibold">
-                      {invoicePagination.total_records > 0
-                        ? invoicePagination.total_records.toLocaleString()
-                        : invoiceRows.length}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => setActiveTab("customer")}
-                  className={`px-4 py-2 text-sm font-medium rounded-lg transition-all ${
-                    activeTab === "customer"
-                      ? "bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm"
-                      : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200"
-                  }`}
-                >
-                  👥 Customer Risk
-                  {displayedCustomerRows.length > 0 && (
-                    <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded-full font-semibold">
-                      {customerPagination.total_records > 0
-                        ? customerPagination.total_records.toLocaleString()
-                        : displayedCustomerRows.length}
-                    </span>
-                  )}
-                </button>
-              </div>
+            {/* ── SECTION 2: HASIL PREDIKSI (EFL & SCORING) ─── */}
+            {activeUISection === "hasil_prediksi" && (
+              <section className="space-y-4 pt-4 fade-in animate-in">
+                {/* Top EFL Table */}
+                {topEflRows.length > 0 && (
+                  <DataTable
+                    rows={topEflRows}
+                    title="Top Expected Financial Loss"
+                    subtitle="Invoice dengan potensi kerugian finansial tertinggi"
+                    priorityCols={[
+                      "CUSTOMER_NAME",
+                      "ACCOUNT_NUMBER",
+                      "CUSTOMER_TRX_ID",
+                      "TRX_DATE",
+                      "days_to_due",
+                      "expected_financial_loss",
+                      "prob_bad_debt",
+                      "TRX_AMOUNT",
+                      "risk_level",
+                      "recommended_action",
+                    ]}
+                  />
+                )}
 
-              {/* Invoice Tab */}
-              {activeTab === "invoice" && (
-                <div className="space-y-4">
-                  {/* Top EFL table */}
-                  {topEflRows.length > 0 && (
-                    <DataTable
-                      rows={topEflRows}
-                      title="Top Expected Financial Loss"
-                      subtitle="Invoice dengan potensi kerugian finansial tertinggi"
-                      priorityCols={[
-                        "CUSTOMER_NAME",
-                        "ACCOUNT_NUMBER",
-                        "CUSTOMER_TRX_ID",
-                        "TRX_DATE",
-                        "days_to_due",
-                        "expected_financial_loss",
-                        "prob_bad_debt",
-                        "TRX_AMOUNT",
-                        "risk_level",
-                        "recommended_action",
-                      ]}
+                {/* Main Invoice Table */}
+                {invoiceRows.length === 0 ? (
+                  <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
+                    Tidak ada invoice yang cocok dengan filter saat ini.
+                  </div>
+                ) : (
+                  <DataTable
+                    rows={invoiceRows}
+                    title="Invoice Scores"
+                    subtitle="Hasil prediksi per invoice"
+                    isServerMode={activeEndpoint === "score"}
+                    serverPagination={invoicePagination}
+                    serverSearch={invoiceSearch}
+                    onSearchChange={(value) => {
+                      setInvoiceSearch(value);
+                      setInvoicePage(1);
+                    }}
+                    serverSort={{ key: invoiceSortBy, direction: invoiceSortOrder }}
+                    onSortChange={(key, direction) => {
+                      if (!direction) {
+                        setInvoiceSortBy("prob_bad_debt");
+                        setInvoiceSortOrder("desc");
+                      } else {
+                        setInvoiceSortBy(key);
+                        setInvoiceSortOrder(direction);
+                      }
+                    }}
+                    onPageChange={(page) => setInvoicePage(page)}
+                    priorityCols={[
+                      "CUSTOMER_NAME",
+                      "ACCOUNT_NUMBER",
+                      "CUSTOMER_TRX_ID",
+                      "TRX_DATE",
+                      "days_to_due",
+                      "TRX_AMOUNT",
+                      "prob_bad_debt",
+                      "risk_level",
+                      "recommended_action",
+                    ]}
+                  />
+                )}
+              </section>
+            )}
+
+            {/* ── SECTION 3: CUSTOMER RISK ─── */}
+            {activeUISection === "customer_risk" && (
+              <section className="space-y-4 pt-4 fade-in animate-in">
+                {/* Customer Summary Cards */}
+                {displayedCustomerRiskSummary && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    <StatCard
+                      icon="👥"
+                      label="Total Customers"
+                      value={
+                        activeEndpoint === "score"
+                          ? customerPagination.total_records ||
+                            customerRows.length
+                          : displayedCustomerRows.length
+                      }
                     />
-                  )}
-
-                  {/* Invoice table */}
-                  {invoiceRows.length === 0 ? (
-                    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
-                      Tidak ada invoice yang cocok dengan filter saat ini.
-                    </div>
-                  ) : (
-                    <DataTable
-                      rows={invoiceRows}
-                      title="Invoice Scores"
-                      subtitle="Hasil prediksi per invoice"
-                      isServerMode={activeEndpoint === "score"}
-                      serverPagination={invoicePagination}
-                      serverSearch={invoiceSearch}
-                      onSearchChange={(value) => {
-                        setInvoiceSearch(value);
-                        setInvoicePage(1);
-                      }}
-                      serverSort={{ key: invoiceSortBy, direction: invoiceSortOrder }}
-                      onSortChange={(key, direction) => {
-                        if (!direction) {
-                          setInvoiceSortBy("prob_bad_debt");
-                          setInvoiceSortOrder("desc");
-                        } else {
-                          setInvoiceSortBy(key);
-                          setInvoiceSortOrder(direction);
-                        }
-                      }}
-                      onPageChange={(page) => setInvoicePage(page)}
-                      priorityCols={[
-                        "CUSTOMER_NAME",
-                        "ACCOUNT_NUMBER",
-                        "CUSTOMER_TRX_ID",
-                        "TRX_DATE",
-                        "days_to_due",
-                        "TRX_AMOUNT",
-                        "prob_bad_debt",
-                        "risk_level",
-                        "recommended_action",
-                      ]}
-                    />
-                  )}
-                </div>
-              )}
-
-              {/* Customer Tab */}
-              {activeTab === "customer" && (
-                <div className="space-y-4">
-                  {/* Customer Summary Cards */}
-                  {displayedCustomerRiskSummary && (
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {displayedCustomerRiskSummary.HIGH != null && (
                       <StatCard
-                        icon="👥"
-                        label="Total Customers"
-                        value={
-                          activeEndpoint === "score"
-                            ? customerPagination.total_records ||
-                              customerRows.length
-                            : displayedCustomerRows.length
-                        }
+                        icon="🔴"
+                        label="High Risk"
+                        value={displayedCustomerRiskSummary.HIGH}
+                        variant="danger"
                       />
-                      {displayedCustomerRiskSummary.HIGH != null && (
-                        <StatCard
-                          icon="🔴"
-                          label="High Risk"
-                          value={displayedCustomerRiskSummary.HIGH}
-                          variant="danger"
-                        />
-                      )}
-                      {displayedCustomerRiskSummary.MEDIUM != null && (
-                        <StatCard
-                          icon="🟠"
-                          label="Medium Risk"
-                          value={displayedCustomerRiskSummary.MEDIUM}
-                          variant="warning"
-                        />
-                      )}
-                      {displayedCustomerRiskSummary.LOW != null && (
-                        <StatCard
-                          icon="🟢"
-                          label="Low Risk"
-                          value={displayedCustomerRiskSummary.LOW}
-                          variant="success"
-                        />
-                      )}
-                    </div>
-                  )}
+                    )}
+                    {displayedCustomerRiskSummary.MEDIUM != null && (
+                      <StatCard
+                        icon="🟠"
+                        label="Medium Risk"
+                        value={displayedCustomerRiskSummary.MEDIUM}
+                        variant="warning"
+                      />
+                    )}
+                    {displayedCustomerRiskSummary.LOW != null && (
+                      <StatCard
+                        icon="🟢"
+                        label="Low Risk"
+                        value={displayedCustomerRiskSummary.LOW}
+                        variant="success"
+                      />
+                    )}
+                  </div>
+                )}
 
-                  {displayedCustomerRows.length === 0 ? (
-                    <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
-                      Data customer risk belum tersedia.
-                    </div>
-                  ) : (
-                    <DataTable
-                      rows={displayedCustomerRows}
-                      title="Customer Risk List"
-                      subtitle="Agregasi prediksi risiko per customer"
-                      isServerMode={activeEndpoint === "score"}
-                      serverPagination={customerPagination}
-                      serverSearch={customerSearch}
-                      onSearchChange={(value) => {
-                        setCustomerSearch(value);
-                        setCustomerPage(1);
-                      }}
-                      serverSort={{ key: customerSortBy, direction: customerSortOrder }}
-                      onSortChange={(key, direction) => {
-                        if (!direction) {
-                          setCustomerSortBy("cust_score_max");
-                          setCustomerSortOrder("desc");
-                        } else {
-                          setCustomerSortBy(key);
-                          setCustomerSortOrder(direction);
-                        }
-                      }}
-                      onPageChange={(page) => setCustomerPage(page)}
-                      priorityCols={[
-                        "CUSTOMER_NAME",
-                        "ACCOUNT_NUMBER",
-                        "PARTY_ID",
-                        "cust_score_max",
-                        "cust_score_mean",
-                        "cust_score_wavg_amount",
-                        "risk_cust",
-                        "invoice_cnt",
-                        "total_amount",
-                        "paid_ratio_pre_due_total",
-                        "pct_invoices_gap_gt_90_pre_due",
-                      ]}
-                    />
-                  )}
-                </div>
-              )}
-            </div>
+                {/* Customer Table */}
+                {displayedCustomerRows.length === 0 ? (
+                  <div className="rounded-xl border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900/40 p-8 text-sm text-gray-500 dark:text-gray-400 text-center">
+                    Data customer risk belum tersedia.
+                  </div>
+                ) : (
+                  <DataTable
+                    rows={displayedCustomerRows}
+                    title="Customer Risk List"
+                    subtitle="Agregasi prediksi risiko per customer"
+                    isServerMode={activeEndpoint === "score"}
+                    serverPagination={customerPagination}
+                    serverSearch={customerSearch}
+                    onSearchChange={(value) => {
+                      setCustomerSearch(value);
+                      setCustomerPage(1);
+                    }}
+                    serverSort={{ key: customerSortBy, direction: customerSortOrder }}
+                    onSortChange={(key, direction) => {
+                      if (!direction) {
+                        setCustomerSortBy("cust_score_max");
+                        setCustomerSortOrder("desc");
+                      } else {
+                        setCustomerSortBy(key);
+                        setCustomerSortOrder(direction);
+                      }
+                    }}
+                    onPageChange={(page) => setCustomerPage(page)}
+                    priorityCols={[
+                      "CUSTOMER_NAME",
+                      "ACCOUNT_NUMBER",
+                      "PARTY_ID",
+                      "cust_score_max",
+                      "cust_score_mean",
+                      "cust_score_wavg_amount",
+                      "risk_cust",
+                      "invoice_cnt",
+                      "total_amount",
+                      "paid_ratio_pre_due_total",
+                      "pct_invoices_gap_gt_90_pre_due",
+                    ]}
+                  />
+                )}
+              </section>
+            )}
 
             {/* Raw JSON Collapsible */}
             <details className="bg-white dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl group">
@@ -1474,7 +1534,7 @@ export default function Dashboard() {
       </div>
 
       {/* ── Footer ─── */}
-      <footer className="border-t border-gray-200 dark:border-gray-800 mt-12 py-6 bg-white/80 dark:bg-gray-900/50">
+      <footer className="mt-auto border-t border-gray-200 dark:border-gray-800 py-6 bg-white/80 dark:bg-gray-900/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-gray-400 dark:text-gray-500">
           <span>Bad Debt Early-Warning System · Kalla Group</span>
           <span>© {new Date().getFullYear()} All rights reserved.</span>

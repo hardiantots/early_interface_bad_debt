@@ -22,7 +22,6 @@ import {
 const normalizeApiBase = (value?: string): string => {
   const raw = String(value || "").trim();
   if (!raw) return "http://localhost:8000";
-  if (raw.startsWith("/")) return raw.replace(/\/+$/, "");
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
   return withProtocol.replace(/\/+$/, "");
 };

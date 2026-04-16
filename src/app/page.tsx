@@ -21,12 +21,16 @@ import {
 // ── Config ─────────────────────────────────────────────────────────────
 const normalizeApiBase = (value?: string): string => {
   const raw = String(value || "").trim();
-  if (!raw) return "http://localhost:8000";
+  // If no value, fallback to proxy path or localhost
+  if (!raw) return "/api";
+  // Allow relative paths for proxy (e.g. "/api")
+  if (raw.startsWith("/")) return raw.replace(/\/+$/, "");
   const withProtocol = /^https?:\/\//i.test(raw) ? raw : `http://${raw}`;
   return withProtocol.replace(/\/+$/, "");
 };
 
-const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE);
+// Use "/api" as fallback which will be Proxied by next.config.ts to VM IP
+const API_BASE = normalizeApiBase(process.env.NEXT_PUBLIC_API_BASE || "/api");
 
 const getTodayISO = () => new Date().toISOString().slice(0, 10);
 

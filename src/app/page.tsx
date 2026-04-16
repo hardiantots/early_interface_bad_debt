@@ -308,6 +308,12 @@ export default function Dashboard() {
       setCustomerRows(scoringData.customer_risk || []);
       setCustomerRiskSummary(scoringData.customer_risk_summary || null);
       setCustomerPagination(scoringData.pagination || defaultPagination);
+
+      // Inform user if customer risk data came from a wider-range fallback job
+      if (scoringData.fallback_notice) {
+        appendLog("warn", scoringData.fallback_notice);
+        setNotice(scoringData.fallback_notice);
+      }
     },
     [
       selectedTimeRange,

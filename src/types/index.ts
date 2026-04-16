@@ -38,6 +38,10 @@ export interface ScoringResult {
   snapshot_date?: string;
   effective_snapshot_date?: string;
   time_range?: string;
+  /** Actual time_range of the data when a wider-range fallback job was used */
+  effective_time_range?: string;
+  /** Human-readable message set when customer risk data comes from a fallback job */
+  fallback_notice?: string | null;
   total_invoices?: number;
   processed_invoices?: number;
   risk_summary?: Record<string, number>;

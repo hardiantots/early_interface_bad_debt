@@ -72,7 +72,7 @@ const CustomLabel = ({
   );
 };
 
-export function RiskDonut({ summary, title, subtitle }: RiskDonutProps) {
+export const RiskDonut = React.memo(function RiskDonut({ summary, title, subtitle }: RiskDonutProps) {
   const data = RISK_ORDER.filter((k) => (summary[k] || 0) > 0).map((k) => ({
     name: RISK_CONFIG[k]?.label || k,
     value: summary[k] || 0,
@@ -179,4 +179,4 @@ export function RiskDonut({ summary, title, subtitle }: RiskDonutProps) {
       </div>
     </div>
   );
-}
+});

@@ -111,7 +111,7 @@ export default function Dashboard() {
     { key: "1y", label: "1 tahun terakhir" },
     { key: "all", label: "Semua data (terlama s/d terbaru)" },
   ]);
-  const [selectedTimeRange, setSelectedTimeRange] = useState("3m");
+  const [selectedTimeRange, setSelectedTimeRange] = useState("6m");
   const [models, setModels] = useState<{ key: string; label: string }[]>([]);
   const [selectedModel, setSelectedModel] = useState("stacked");
   const [snapshotDate, setSnapshotDate] = useState(getTodayISO());
@@ -486,9 +486,9 @@ export default function Dashboard() {
             setInvoicePagination(defaultPagination);
             setCustomerPagination(defaultPagination);
             setNotice(
-              "Data untuk filter ini belum tersedia. Sistem akan menyiapkan compute otomatis.",
+              "Data untuk filter ini belum tersedia. Klik \"Refresh Scoring\" untuk menjalankan compute.",
             );
-            appendLog("warn", "Data belum ada untuk filter saat ini");
+            appendLog("warn", "Data belum ada untuk filter ini — klik Refresh Scoring untuk proses.");
             return;
           }
           setError(data.error || `Request failed (${resp.status})`);
@@ -1290,61 +1290,69 @@ export default function Dashboard() {
             </div>
 
             {/* ── SECTION 1: VISUALISASI ─── */}
-            {activeUISection === "visualisasi" && hasCharts && (
-              <section className="space-y-4 pt-4 fade-in animate-in">
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                  {/* Invoice Risk Donut */}
-                  {displayedRiskSummary &&
-                    Object.keys(displayedRiskSummary).length > 0 && (
-                      <RiskDonut
-                        summary={displayedRiskSummary}
-                        title="Invoice Risk Distribution"
-                        subtitle="Distribusi risiko per invoice"
-                      />
+            <div
+              style={{ display: activeUISection === "visualisasi" ? "block" : "none" }}
+              className="pt-4"
+            >
+              {hasCharts && (
+                <section className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {/* Invoice Risk Donut */}
+                    {displayedRiskSummary &&
+                      Object.keys(displayedRiskSummary).length > 0 && (
+                        <RiskDonut
+                          summary={displayedRiskSummary}
+                          title="Invoice Risk Distribution"
+                          subtitle="Distribusi risiko per invoice"
+                        />
+                      )}
+
+                    {/* Customer Risk Donut */}
+                    {displayedCustomerRiskSummary &&
+                      Object.keys(displayedCustomerRiskSummary).length > 0 && (
+                        <RiskDonut
+                          summary={displayedCustomerRiskSummary}
+                          title="Customer Risk Distribution"
+                          subtitle="Distribusi risiko per customer"
+                        />
+                      )}
+
+                    {/* Score Distribution */}
+                    {displayedChartRows.length > 0 && (
+                      <ScoreDistribution rows={displayedChartRows} />
+                    )}
+                    
+                    {/* Risk Matrix Chart (Scatter Flow) */}
+                    {displayedChartRows.length > 0 && (
+                      <div className="md:col-span-2 xl:col-span-3">
+                        <RiskMatrixChart rows={displayedChartRows} />
+                      </div>
                     )}
 
-                  {/* Customer Risk Donut */}
-                  {displayedCustomerRiskSummary &&
-                    Object.keys(displayedCustomerRiskSummary).length > 0 && (
-                      <RiskDonut
-                        summary={displayedCustomerRiskSummary}
-                        title="Customer Risk Distribution"
-                        subtitle="Distribusi risiko per customer"
-                      />
+                    {/* Top EFL Bar Chart */}
+                    {topEflRows.length > 0 && (
+                      <div className="md:col-span-2 xl:col-span-3">
+                        <EflBarChart rows={topEflRows} topN={10} />
+                      </div>
                     )}
 
-                  {/* Score Distribution */}
-                  {displayedChartRows.length > 0 && (
-                    <ScoreDistribution rows={displayedChartRows} />
-                  )}
-                  
-                  {/* Risk Matrix Chart (Scatter Flow) */}
-                  {displayedChartRows.length > 0 && (
-                    <div className="md:col-span-2 xl:col-span-3">
-                      <RiskMatrixChart rows={displayedChartRows} />
-                    </div>
-                  )}
-
-                  {/* Top EFL Bar Chart */}
-                  {topEflRows.length > 0 && (
-                    <div className="md:col-span-2 xl:col-span-3">
-                      <EflBarChart rows={topEflRows} topN={10} />
-                    </div>
-                  )}
-
-                  {/* Action Bar Chart */}
-                  {displayedChartRows.length > 0 && (
-                    <div className="md:col-span-2 xl:col-span-3">
-                      <ActionBarChart rows={displayedChartRows} />
-                    </div>
-                  )}
-                </div>
-              </section>
-            )}
+                    {/* Action Bar Chart */}
+                    {displayedChartRows.length > 0 && (
+                      <div className="md:col-span-2 xl:col-span-3">
+                        <ActionBarChart rows={displayedChartRows} />
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+            </div>
 
             {/* ── SECTION 2: HASIL PREDIKSI (EFL & SCORING) ─── */}
-            {activeUISection === "hasil_prediksi" && (
-              <section className="space-y-4 pt-4 fade-in animate-in">
+            <div
+              style={{ display: activeUISection === "hasil_prediksi" ? "block" : "none" }}
+              className="pt-4"
+            >
+              <section className="space-y-4">
                 {/* Top EFL Table */}
                 {topEflRows.length > 0 && (
                   <DataTable
@@ -1408,11 +1416,14 @@ export default function Dashboard() {
                   />
                 )}
               </section>
-            )}
+            </div>
 
             {/* ── SECTION 3: CUSTOMER RISK ─── */}
-            {activeUISection === "customer_risk" && (
-              <section className="space-y-4 pt-4 fade-in animate-in">
+            <div
+              style={{ display: activeUISection === "customer_risk" ? "block" : "none" }}
+              className="pt-4"
+            >
+              <section className="space-y-4">
                 {/* Customer Summary Cards */}
                 {displayedCustomerRiskSummary && (
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -1497,7 +1508,7 @@ export default function Dashboard() {
                   />
                 )}
               </section>
-            )}
+            </div>
 
             {/* Raw JSON Collapsible */}
             <details className="bg-white dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-xl group">

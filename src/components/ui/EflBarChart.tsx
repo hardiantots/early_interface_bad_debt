@@ -92,7 +92,7 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   );
 };
 
-export function EflBarChart({ rows, topN = 10 }: EflBarChartProps) {
+export const EflBarChart = React.memo(function EflBarChart({ rows, topN = 10 }: EflBarChartProps) {
   const data = rows
     .filter(
       (r) =>
@@ -167,4 +167,4 @@ export function EflBarChart({ rows, topN = 10 }: EflBarChartProps) {
       </ResponsiveContainer>
     </div>
   );
-}
+});

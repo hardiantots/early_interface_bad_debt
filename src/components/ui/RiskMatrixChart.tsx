@@ -84,7 +84,7 @@ const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
   );
 };
 
-export function RiskMatrixChart({ rows }: RiskMatrixChartProps) {
+export const RiskMatrixChart = React.memo(function RiskMatrixChart({ rows }: RiskMatrixChartProps) {
   const data = rows
     .filter(
       (r) =>
@@ -159,4 +159,4 @@ export function RiskMatrixChart({ rows }: RiskMatrixChartProps) {
       </ResponsiveContainer>
     </div>
   );
-}
+});

@@ -54,7 +54,7 @@ const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   );
 };
 
-export function ScoreDistribution({
+export const ScoreDistribution = React.memo(function ScoreDistribution({
   rows,
   scoreKey = "prob_bad_debt",
 }: ScoreDistributionProps) {
@@ -134,4 +134,4 @@ export function ScoreDistribution({
       </div>
     </div>
   );
-}
+});

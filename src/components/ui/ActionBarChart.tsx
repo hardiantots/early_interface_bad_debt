@@ -50,7 +50,7 @@ const CustomTooltip = ({ active, payload }: any) => {
   );
 };
 
-export function ActionBarChart({ rows }: ActionBarChartProps) {
+export const ActionBarChart = React.memo(function ActionBarChart({ rows }: ActionBarChartProps) {
   const data = useMemo(() => {
     const counts: Record<string, number> = {};
     rows.forEach((r) => {
@@ -109,4 +109,4 @@ export function ActionBarChart({ rows }: ActionBarChartProps) {
       </ResponsiveContainer>
     </div>
   );
-}
+});

@@ -1371,6 +1371,7 @@ export default function Dashboard() {
                     subtitle="Invoice dengan potensi kerugian finansial tertinggi"
                     priorityCols={[
                       "CUSTOMER_NAME",
+                      "SBU",
                       "ACCOUNT_NUMBER",
                       "CUSTOMER_TRX_ID",
                       "TRX_DATE",
@@ -1414,6 +1415,7 @@ export default function Dashboard() {
                     onPageChange={(page) => setInvoicePage(page)}
                     priorityCols={[
                       "CUSTOMER_NAME",
+                      "SBU",
                       "ACCOUNT_NUMBER",
                       "CUSTOMER_TRX_ID",
                       "TRX_DATE",

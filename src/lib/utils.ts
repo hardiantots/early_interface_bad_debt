@@ -24,6 +24,7 @@ export function riskColor(level: string): string {
 const NICE_HEADERS: Record<string, string> = {
   ACCOUNT_NUMBER: "Account",
   CUSTOMER_NAME: "Customer",
+  SBU: "SBU",
   CUSTOMER_TRX_ID: "TRX ID",
   PARTY_ID: "Party ID",
   TRX_AMOUNT: "Amount",

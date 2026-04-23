@@ -31,7 +31,7 @@ module.exports = {
         PORT: "3000",
         HOSTNAME: "127.0.0.1",
         // Next.js server-side proxy target (internal, same VM)
-        BACKEND_API_URL: "http://127.0.0.1:8000",
+        BACKEND_API_URL: "http://127.0.0.1:8001",
         // Relative path — browser sends /api/* which Nginx forwards to Next.js,
         // which then proxies to FastAPI at BACKEND_API_URL
         NEXT_PUBLIC_API_BASE: "/api",

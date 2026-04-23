@@ -47,7 +47,7 @@ if [ "$RESTART_ONLY" = false ]; then
   # Ensure production env vars are set for the build
   export NODE_ENV=production
   export NEXT_PUBLIC_API_BASE=/api
-  export BACKEND_API_URL=http://127.0.0.1:8000
+  export BACKEND_API_URL=http://127.0.0.1:8001
   npm run build
 fi
 

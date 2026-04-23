@@ -30,8 +30,11 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# env files — set directly on each environment, never commit
 .env*
+
+# PM2 runtime logs (generated on server)
+/logs/
 
 # vercel
 .vercel

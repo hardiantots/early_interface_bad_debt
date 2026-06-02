@@ -49,6 +49,10 @@ if [ "$RESTART_ONLY" = false ]; then
   export NEXT_PUBLIC_API_BASE=/api
   export BACKEND_API_URL=http://127.0.0.1:8001
   npm run build
+  
+  echo "📂 Copying static assets to standalone directory..."
+  cp -r public .next/standalone/ || true
+  cp -r .next/static .next/standalone/.next/ || true
 fi
 
 # ── Step 4: Restart / Start PM2 ───────────────────────────────────────────

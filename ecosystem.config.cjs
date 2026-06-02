@@ -29,7 +29,7 @@ module.exports = {
       env_production: {
         NODE_ENV: "production",
         PORT: "3000",
-        HOSTNAME: "127.0.0.1",
+        HOSTNAME: "0.0.0.0",
         // Next.js server-side proxy target (internal, same VM)
         BACKEND_API_URL: "http://127.0.0.1:8001",
         // Relative path — browser sends /api/* which Nginx forwards to Next.js,

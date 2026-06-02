@@ -180,11 +180,11 @@ export function DataTable({
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-gray-500 whitespace-nowrap">
-            {activeTotal.toLocaleString()} rows
+            {activeTotal.toLocaleString()} baris
           </span>
           <input
             type="text"
-            placeholder="Search..."
+            placeholder="Cari..."
             value={searchValue}
             onChange={(e) => {
               if (isServerMode) {
@@ -204,14 +204,14 @@ export function DataTable({
 
       {/* Table */}
       <div className="overflow-x-auto scrollbar-thin">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[760px] text-xs sm:text-sm">
           <thead>
             <tr className="border-b border-gray-200 dark:border-gray-800 bg-gray-50/80 dark:bg-gray-900/50">
               {columns.map((col) => (
                 <th
                   key={col}
                   onClick={() => requestSort(col)}
-                  className="px-3 py-2.5 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800/60 transition-colors select-none group"
+                  className="px-3 py-2.5 text-left text-[11px] sm:text-xs font-semibold text-gray-600 dark:text-gray-400 tracking-wide whitespace-nowrap cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800/60 transition-colors select-none group"
                 >
                   <div className="flex items-center">
                     {niceHeader(col)}
@@ -291,15 +291,15 @@ export function DataTable({
       {/* Pagination */}
       <div className="px-4 py-3 bg-gray-50 dark:bg-gray-900/40 border-t border-gray-200 dark:border-gray-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
         <div className="text-gray-500 dark:text-gray-400">
-          Showing{" "}
+          Menampilkan{" "}
           <span className="font-semibold text-gray-700 dark:text-gray-300">
             {fromIdx}–{toIdx}
           </span>{" "}
-          of{" "}
+          dari{" "}
           <span className="font-semibold text-gray-700 dark:text-gray-300">
             {activeTotal.toLocaleString()}
           </span>{" "}
-          rows
+          baris
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -315,7 +315,7 @@ export function DataTable({
                        disabled:opacity-40 disabled:cursor-not-allowed border border-gray-300 dark:border-gray-700
                        rounded-lg transition-colors text-gray-700 dark:text-gray-300 font-medium"
           >
-            ← Prev
+            Sebelumnya
           </button>
           <div className="px-3 font-medium text-gray-600 dark:text-gray-400 min-w-[80px] text-center">
             {activePage} / {totalPages}
@@ -333,7 +333,7 @@ export function DataTable({
                        disabled:opacity-40 disabled:cursor-not-allowed border border-gray-300 dark:border-gray-700
                        rounded-lg transition-colors text-gray-700 dark:text-gray-300 font-medium"
           >
-            Next →
+            Berikutnya
           </button>
         </div>
       </div>

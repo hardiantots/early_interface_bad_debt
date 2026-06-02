@@ -666,6 +666,7 @@ export default function Dashboard() {
     runScoring(activeEndpoint, {
       timeRange: selectedTimeRange,
       modelKey: selectedModel,
+      thresh: threshold,
     });
   }, [
     invoicePage,
@@ -676,6 +677,7 @@ export default function Dashboard() {
     activeEndpoint,
     selectedTimeRange,
     selectedModel,
+    threshold,
     runScoring,
   ]);
 
@@ -1367,12 +1369,13 @@ export default function Dashboard() {
                 {topEflRows.length > 0 && (
                   <DataTable
                     rows={topEflRows}
-                    title="Top Expected Financial Loss"
-                    subtitle="Invoice dengan potensi kerugian finansial tertinggi"
+                    title="Top Estimasi Kerugian"
+                    subtitle="Invoice dengan estimasi kerugian finansial tertinggi"
                     priorityCols={[
                       "CUSTOMER_NAME",
                       "SBU",
                       "ACCOUNT_NUMBER",
+                      "TRX_NUMBER",
                       "CUSTOMER_TRX_ID",
                       "TRX_DATE",
                       "days_to_due",
@@ -1393,7 +1396,7 @@ export default function Dashboard() {
                 ) : (
                   <DataTable
                     rows={invoiceRows}
-                    title="Invoice Scores"
+                    title="Skor Invoice"
                     subtitle="Hasil prediksi per invoice"
                     isServerMode={activeEndpoint === "score"}
                     serverPagination={invoicePagination}
@@ -1417,6 +1420,7 @@ export default function Dashboard() {
                       "CUSTOMER_NAME",
                       "SBU",
                       "ACCOUNT_NUMBER",
+                      "TRX_NUMBER",
                       "CUSTOMER_TRX_ID",
                       "TRX_DATE",
                       "days_to_due",
@@ -1484,7 +1488,7 @@ export default function Dashboard() {
                 ) : (
                   <DataTable
                     rows={displayedCustomerRows}
-                    title="Customer Risk List"
+                    title="Daftar Risiko Customer"
                     subtitle="Agregasi prediksi risiko per customer"
                     isServerMode={activeEndpoint === "score"}
                     serverPagination={customerPagination}
